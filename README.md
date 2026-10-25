@@ -197,10 +197,8 @@ python auth_login.py
 ```
 
 1. The script opens the official Lidl Plus login page in your default browser.
-2. Log in and confirm the SMS code if needed.
-3. The browser is redirected to `com.lidlplus.app://callback?code=...`.
-4. Copy that full URL from the address bar and paste it into the terminal.
-5. The refresh token is saved in `.env` as `LIDL_REFRESH_TOKEN`.
+2. Log in and confirm the SMS code if requested.
+3. The refresh token is saved in `.env` as `LIDL_REFRESH_TOKEN`.
 
 The app never asks for your Lidl password. Re-run the wizard whenever the token
 expires or you change your Lidl account.
