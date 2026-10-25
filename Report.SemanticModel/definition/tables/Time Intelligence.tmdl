@@ -1,0 +1,97 @@
+table 'Time Intelligence'
+	lineageTag: 92055dbf-4c25-47a4-a8b0-6f0b3b749077
+
+	calculationGroup
+
+		calculationItem Current = SELECTEDMEASURE()
+
+		calculationItem 'Same Period Last Year' =
+				CALCULATE (
+				    SELECTEDMEASURE (),
+				    DATEADD ( 'DimDate'[Date], -1, YEAR )
+				)
+
+		calculationItem 'Same Period Last Quarter' =
+				CALCULATE(
+				    SELECTEDMEASURE(),
+				    DATEADD('DimDate'[Date], -1, QUARTER)
+				    )
+
+		calculationItem 'Same Period Last Month' =
+				CALCULATE(
+				    SELECTEDMEASURE(),
+				    DATEADD(DimDate[Date], -1, MONTH)
+				)
+
+		calculationItem 'Same Period Last Week' =
+				CALCULATE(
+				    SELECTEDMEASURE(),
+				    DATEADD(DimDate[Date], -7, DAY)
+				)
+
+		calculationItem 'SPLM Diff' = ```
+				
+				VAR _Current = SELECTEDMEASURE ()
+				VAR _Prior = 
+				    CALCULATE (
+				        SELECTEDMEASURE (),
+				        DATEADD ( 'DimDate'[Date], -1, MONTH )
+				    )
+				RETURN
+				    IF ( NOT ISBLANK ( _Current ), _Current - COALESCE ( _Prior, 0 ) )
+				```
+
+		calculationItem 'SPLQ Diff' = ```
+				
+				VAR _Current = SELECTEDMEASURE ()
+				VAR _Prior = 
+				    CALCULATE (
+				        SELECTEDMEASURE (),
+				        DATEADD ( 'DimDate'[Date], -1, QUARTER )
+				    )
+				RETURN
+				    IF ( NOT ISBLANK ( _Current ), _Current - COALESCE ( _Prior, 0 ) )
+				```
+
+		calculationItem 'SPLY Diff' = ```
+				
+				VAR _Current = SELECTEDMEASURE ()
+				VAR _Prior = 
+				    CALCULATE (
+				        SELECTEDMEASURE (),
+				        DATEADD ( 'DimDate'[Date], -1, YEAR )
+				    )
+				RETURN
+				    IF ( NOT ISBLANK ( _Current ), _Current - COALESCE ( _Prior, 0 ) )
+				```
+
+		calculationItem 'SPLW Diff' = ```
+				
+				VAR _Current = SELECTEDMEASURE ()
+				VAR _Prior = 
+				    CALCULATE (
+				        SELECTEDMEASURE (),
+				        DATEADD ( 'DimDate'[Date], -7, DAY )
+				    )
+				RETURN
+				    IF ( NOT ISBLANK ( _Current ), _Current - COALESCE ( _Prior, 0 ) )
+				```
+
+	column 'Calculation group column'
+		dataType: string
+		lineageTag: 46994ab8-caf3-45bb-a938-0cfd9025cc08
+		summarizeBy: none
+		sourceColumn: Name
+		sortByColumn: Ordinal
+
+		annotation SummarizationSetBy = Automatic
+
+	column Ordinal
+		dataType: int64
+		formatString: 0
+		lineageTag: e4097db2-3b47-41c7-bdfa-8cef61d52b8e
+		summarizeBy: sum
+		sourceColumn: Ordinal
+
+		annotation SummarizationSetBy = Automatic
+

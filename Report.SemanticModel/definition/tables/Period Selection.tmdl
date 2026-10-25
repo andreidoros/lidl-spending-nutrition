@@ -1,0 +1,42 @@
+table 'Period Selection'
+	lineageTag: 027e9a2e-059a-477b-9ba9-caf3d024d55d
+
+	column Period
+		lineageTag: 56032fea-e1b1-401c-ad4b-fb189f1931cd
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [Period]
+		sortByColumn: Period_Order
+
+		annotation SummarizationSetBy = Automatic
+
+	column Period_Order
+		formatString: 0
+		lineageTag: 57d899a3-5f07-4be5-9353-9355a7611e7a
+		summarizeBy: sum
+		isNameInferred
+		sourceColumn: [Period_Order]
+
+		annotation SummarizationSetBy = Automatic
+
+	partition 'Period Selection' = calculated
+		mode: import
+		source =
+				
+				DATATABLE (
+				    "Period", STRING,
+				    "Period_Order", INTEGER,
+				    {
+				        { "Same Period Last Month", 1 },
+				        { "Last Month",   2 },
+				        { "Same Period Last Quarter", 3 },
+				        { "Last Quarter",   4 },
+				        { "Same Period Last Year", 5 },
+				        { "Last Year",   6 },
+				        { "Same Period Last Week", 7 },
+				        { "Last Week",   8 }
+				    }
+				)
+
+	annotation PBI_Id = 72b71d8338844d09b342aa1627a5d9bc
+

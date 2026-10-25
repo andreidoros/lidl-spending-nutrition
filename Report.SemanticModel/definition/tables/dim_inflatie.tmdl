@@ -1,0 +1,68 @@
+table dim_inflatie
+	isHidden
+	lineageTag: 704a4758-bd8b-4342-bda3-243660154fad
+
+	column an_luna
+		dataType: string
+		isHidden
+		lineageTag: 125173d1-f496-4b29-b440-db5e17d63ce1
+		summarizeBy: none
+		sourceColumn: an_luna
+
+		changedProperty = IsHidden
+
+		annotation SummarizationSetBy = Automatic
+
+	column an
+		dataType: int64
+		isHidden
+		formatString: 0
+		lineageTag: 67fbc0b3-aa0a-4c4d-bd4a-b4fabd12ebc3
+		summarizeBy: sum
+		sourceColumn: an
+
+		changedProperty = IsHidden
+
+		annotation SummarizationSetBy = Automatic
+
+	column luna
+		dataType: int64
+		isHidden
+		formatString: 0
+		lineageTag: 04ac7436-fbf1-423d-85bd-0059220d812e
+		summarizeBy: sum
+		sourceColumn: luna
+
+		changedProperty = IsHidden
+
+		annotation SummarizationSetBy = Automatic
+
+	column ipc_alimentar
+		dataType: double
+		isHidden
+		lineageTag: b3382987-00ee-4f5e-ae75-64f095095431
+		summarizeBy: sum
+		sourceColumn: ipc_alimentar
+
+		changedProperty = IsHidden
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	partition dim_inflatie = m
+		mode: import
+		source =
+				let
+				  Source = Csv.Document(File.Contents(#"Project folder path" & "\dim_inflatie.csv"), [Delimiter = ",", Columns = 4, QuoteStyle = QuoteStyle.None]),
+				  #"Promoted headers" = Table.PromoteHeaders(Source, [PromoteAllScalars = true]),
+				    #"Changed Type" = Table.TransformColumnTypes(#"Promoted headers",{{"ipc_alimentar", type number}, {"an_luna", type text}, {"an", Int64.Type}, {"luna", Int64.Type}})
+				in
+				    #"Changed Type"
+
+	changedProperty = IsHidden
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+

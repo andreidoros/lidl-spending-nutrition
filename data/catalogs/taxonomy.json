@@ -1,0 +1,38 @@
+{
+  "Fresh Food": [
+    "Fresh Meat & Fish",
+    "Fresh Fruits & Vegetables",
+    "Dairy & Eggs",
+    "Processed Meat & Deli",
+    "Ready Meals & Chilled Convenience"
+  ],
+  "Pantry & Groceries": [
+    "Canned Goods & Pickles",
+    "Baking & Cooking Ingredients",
+    "Sauces, Oils & Condiments"
+  ],
+  "Beverages": [
+    "Water & Soft Drinks",
+    "Alcoholic Beverages",
+    "Coffee & Tea"
+  ],
+  "Frozen": [
+    "Ice Cream & Frozen Desserts",
+    "Frozen Fruits & Vegetables",
+    "Frozen Fish & Seafood",
+    "Frozen Ready Meals & Pizza"
+  ],
+  "Sweets & Snacks": [
+    "Biscuits & Savory Snacks",
+    "Chocolate & Confectionery",
+    "Desserts & Pastries"
+  ],
+  "Non-Food": [
+    "Non-Food"
+  ],
+  "Bakery & Bread": [
+    "Fresh Bakery & Pastry",
+    "Bread & Bakery Specialties"
+  ]
+}
+

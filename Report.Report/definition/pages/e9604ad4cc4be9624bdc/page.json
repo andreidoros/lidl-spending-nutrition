@@ -1,0 +1,49 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/2.1.0/schema.json",
+  "name": "e9604ad4cc4be9624bdc",
+  "displayName": "Category Tooltip",
+  "displayOption": "ActualSize",
+  "height": 420,
+  "width": 640,
+  "filterConfig": {
+    "filters": [
+      {
+        "name": "f92f6a11eabc46321377",
+        "field": {
+          "Column": {
+            "Expression": {
+              "SourceRef": {
+                "Entity": "DimProducts"
+              }
+            },
+            "Property": "category"
+          }
+        },
+        "type": "Categorical",
+        "howCreated": "Drillthrough"
+      }
+    ]
+  },
+  "pageBinding": {
+    "name": "fbab1c0ca9d6d0e1aed7",
+    "type": "Tooltip",
+    "parameters": [
+      {
+        "name": "054e3b03a94c009ca305",
+        "boundFilter": "f92f6a11eabc46321377",
+        "fieldExpr": {
+          "Column": {
+            "Expression": {
+              "SourceRef": {
+                "Entity": "DimProducts"
+              }
+            },
+            "Property": "category"
+          }
+        }
+      }
+    ]
+  },
+  "visibility": "HiddenInViewMode",
+  "type": "Tooltip"
+}

@@ -1,0 +1,370 @@
+table FactTable
+	lineageTag: 4a7dabb9-1cfb-4d5a-a249-2f19ed3ef37d
+
+	measure Receipts = DISTINCTCOUNTNOBLANK(FactTable[ticket_id])
+		formatString: 0
+		lineageTag: fb578118-90ce-4835-bd39-c391ba8bbc69
+
+	measure 'Salt Intake' = SUMX(FactTable, [Weight (g)] / 100 * (RELATED(DimProducts[salt_100g])))
+		lineageTag: 3de4afe8-4395-4c3c-8927-f4ab023216ff
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Quantity Sold (units/Kgs)' = SUM(FactTable[quantity])
+		formatString: 0
+		lineageTag: 5d2e8de9-5360-4376-bbe5-2b94a2400114
+
+		annotation PBI_FormatHint = {"isDecimal":true}
+
+	measure 'Total Spend (Nominal)' = SUM(FactTable[net_line_total])
+		formatString: #,0.00\ "lei";-#,0.00\ "lei";#,0.00\ "lei"
+		lineageTag: f23bf812-92c3-4d7a-aa7b-1df980fc4e44
+
+		annotation PBI_FormatHint = {"currencyCulture":"ro-RO"}
+
+	measure 'Weight (g)' =
+			
+			SUMX(
+			    FactTable,
+			    VAR IsWeighed = RELATED(DimProducts[is_weighed_default])
+			    VAR PackageWeight = RELATED(DimProducts[package_weight_g])
+			    RETURN
+			        IF(
+			            IsWeighed = TRUE(),
+			            FactTable[quantity] * 1000,
+			            FactTable[quantity] * COALESCE(PackageWeight, 100)
+			        )
+			)
+		formatString: #,0
+		lineageTag: 508698a1-4ed7-46ba-bdc9-804526e92771
+
+		annotation PBI_FormatHint = {"isDecimal":true}
+
+	measure 'Total Kcal' = SUMX(FactTable, (FactTable[Weight (g)] / 100) * RELATED(DimProducts[kcal_100g]))
+		lineageTag: 5b74abfb-31d1-4761-9f75-a53b58fe9626
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Total Protein' = SUMX(FactTable, (FactTable[Weight (g)] / 100) * RELATED(DimProducts[proteins_100g]))
+		lineageTag: 9693ab3a-16f5-4874-898e-28c8be261db0
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Weighted NutriScore (g)' = ```
+			
+			VAR TranzactiiValide = 
+			    FILTER(
+			        'FactTable',
+			        NOT(ISBLANK(RELATED('DimProducts'[nutriscore_score])))
+			    )
+			VAR Numarator = 
+			    SUMX(
+			        TranzactiiValide,
+			        'FactTable'[Weight (g)] * RELATED('DimProducts'[nutriscore_score])
+			    )
+			VAR Numitor = 
+			    SUMX(
+			        TranzactiiValide,
+			        'FactTable'[Weight (g)]
+			    )
+			RETURN
+			    DIVIDE(Numarator, Numitor)
+			```
+		lineageTag: d1e842d3-627f-4564-94ad-46e9b3271c51
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Total Sugars' = SUMX(FactTable, (FactTable[Weight (g)] / 100) * RELATED(DimProducts[sugars_100g]))
+		lineageTag: 7d290235-d852-4735-b7d9-f50d4056ff96
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Total Saturated Fat' = SUMX(FactTable, (FactTable[Weight (g)] / 100) * RELATED(DimProducts[saturated_fat_100g]))
+		lineageTag: 4f2522d4-b35e-4855-86dd-3ac6000fbd53
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Total Fiber' = SUMX(FactTable, (FactTable[Weight (g)] / 100) * RELATED(DimProducts[fiber_100g]))
+		lineageTag: 3968f8d1-3787-4320-9e62-dbf77b3d019d
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Total Fat' = SUMX(FactTable, (FactTable[Weight (g)] / 100) * RELATED(DimProducts[fat_100g]))
+		lineageTag: cf89313d-a3ef-4ce0-bf40-8e0ca0d22c3c
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Total Carbs' = SUMX(FactTable, (FactTable[Weight (g)] / 100) * RELATED(DimProducts[carbs_100g]))
+		lineageTag: f2536d2c-9866-4799-ad07-0f369f85f643
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure NutriScore_Color =
+			
+			VAR Score = [Weighted NutriScore (g)]
+			RETURN
+			    SWITCH(
+			        TRUE(),
+			        ISBLANK(Score), BLANK(),
+			        Score < 0,        "#038141",  -- Clasa A (Verde închis)
+			        Score <= 2,       "#85BB2F",  -- Clasa B (Verde deschis)
+			        Score <= 10,      "#FECB02",  -- Clasa C (Galben)
+			        Score <= 18,      "#EE8100",  -- Clasa D (Portocaliu)
+			        "#E63E11"                     -- Clasa E (Roșu)
+			    )
+		lineageTag: fb6a9868-5398-4b4e-a6b2-3f8401b74e85
+
+	measure Products = DISTINCTCOUNTNOBLANK(FactTable[product_key])
+		formatString: 0
+		lineageTag: 28af27dd-a2e6-4a35-984f-da72bbc48fc6
+
+	measure 'Unit Price' = DIVIDE(SUM(FactTable[line_total]), SUM(FactTable[quantity]))
+		formatString: #,0.0\ "lei";-#,0.0\ "lei";#,0.0\ "lei"
+		lineageTag: d11d4cf9-2037-430e-b760-17b15bd83f5a
+
+		annotation PBI_FormatHint = {"currencyCulture":"ro-RO"}
+
+	measure 'Total Spend (Ajustat la inflatie)' = ```
+			
+			-- 1. Identificăm cea mai recentă lună care are efectiv IPC raportat
+			VAR UltimaLunaCuIPC = 
+			    CALCULATE(
+			        MAX(dim_inflatie[an_luna]),
+			        REMOVEFILTERS(dim_inflatie),
+			        NOT(ISBLANK(dim_inflatie[ipc_alimentar])),
+			        dim_inflatie[ipc_alimentar] > 0
+			    )
+			
+			-- 2. Preluăm indicele oficial al lunii de bază (ancora de preț curent)
+			VAR IPC_Baza = 
+			    CALCULATE(
+			        MAX(dim_inflatie[ipc_alimentar]),
+			        REMOVEFILTERS(dim_inflatie),
+			        dim_inflatie[an_luna] = UltimaLunaCuIPC
+			    )
+			
+			-- 3. Deflatăm fiecare tranzacție în funcție de luna în care a fost emis bonul
+			RETURN
+			    SUMX(
+			        FactTable,
+			        VAR AnLunaTranzactie = FORMAT(FactTable[date], "YYYY-MM")
+			        VAR IPC_Tranzactie = 
+			            LOOKUPVALUE(
+			                dim_inflatie[ipc_alimentar],
+			                dim_inflatie[an_luna], AnLunaTranzactie
+			            )
+			        -- Dacă luna nu e raportată încă (Sept/Oct), lăsăm factor 1.0 (prețuri curente)
+			        VAR FactorDeflatare = 
+			            IF(
+			                ISBLANK(IPC_Tranzactie) || IPC_Tranzactie <= 0,
+			                1.0,
+			                DIVIDE(IPC_Baza, IPC_Tranzactie)
+			            )
+			        RETURN
+			            FactTable[net_line_total] * FactorDeflatare
+			    )
+			```
+		lineageTag: 99f8089b-08ca-4f10-ad88-6082047cd681
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Total Spend' =
+			
+			VAR Selectie = SELECTEDVALUE(SlicerInflatie[Optiune], "Nominal (Preț Istoric)")
+			RETURN
+			    IF(
+			        Selectie = "Ajustat la Inflație (Preț Curent)",
+			        [Total Spend (Ajustat la inflatie)],
+			        [Total Spend (Nominal)]
+			    )
+		formatString: #,0.0\ "lei";-#,0.0\ "lei";#,0.0\ "lei"
+		lineageTag: 040cfca4-4663-445a-aa86-95f65e500f53
+
+		annotation PBI_FormatHint = {"currencyCulture":"ro-RO"}
+
+	measure 'Total Salt' = SUMX(FactTable, (FactTable[Weight (g)] / 100) * RELATED(DimProducts[salt_100g]))
+		lineageTag: 5552b39c-c808-4d7d-b1f6-56f82e8fac3b
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Undiscounted Spend' = SUM(FactTable[line_total])
+		lineageTag: d75d0ad6-52d9-4cbf-a533-5db3ee1bc917
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Kcal Mediu per Achizitie' = ```
+			
+			DIVIDE(
+			    [Total Kcal], 
+			    DISTINCTCOUNT(FactTable[ticket_id])
+			)
+			```
+		lineageTag: da20c46e-6152-478a-8622-86deeb199ced
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Kcal per Ambalaj' =
+			
+			VAR IsVrac = SELECTEDVALUE(DimProducts[is_weighed_default])
+			VAR GreutatePachet = SELECTEDVALUE(DimProducts[package_weight_g])
+			VAR Kcal100 = SELECTEDVALUE(DimProducts[kcal_100g])
+			RETURN
+			    SWITCH(
+			        TRUE(),
+			        ISBLANK(Kcal100), BLANK(),
+			        -- Dacă e ambalaj fix (ex: 200g crenvurști -> 434 kcal)
+			        NOT(ISBLANK(GreutatePachet)) && GreutatePachet > 0, (GreutatePachet / 100) * Kcal100,
+			        -- Dacă e vrac pur (fără ambalaj fix), raportăm convențional la 1 kg
+			        IsVrac = TRUE(), Kcal100 * 10,
+			        BLANK()
+			    )
+		lineageTag: d84f5f1c-73ba-494d-a5ce-ad3a5bee931a
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure AOV = DIVIDE([Total Spend (Nominal)], [Receipts])
+		formatString: #,0.0\ "lei";-#,0.0\ "lei";#,0.0\ "lei"
+		lineageTag: 8e0a0a37-a2be-45cd-9448-b8c0dc338d36
+
+		annotation PBI_FormatHint = {"currencyCulture":"ro-RO"}
+
+	measure 'Nutriscore Grade Color' = ```
+			
+			    SWITCH(
+			        TRUE(),
+			        ISBLANK(Score), BLANK(),
+			         < 0,        "#038141",  -- Clasa A (Verde închis)
+			        Score <= 2,       "#85BB2F",  -- Clasa B (Verde deschis)
+			        Score <= 10,      "#FECB02",  -- Clasa C (Galben)
+			        Score <= 18,      "#EE8100",  -- Clasa D (Portocaliu)
+			        "#E63E11"                     -- Clasa E (Roșu)
+			    )
+			```
+		lineageTag: 7e97ea95-c49e-4b79-8629-05a7ed99cb1b
+
+	column ticket_id
+		dataType: string
+		lineageTag: a0e4be9d-e300-42ea-96fb-2c5032e31e66
+		summarizeBy: none
+		sourceColumn: ticket_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column date
+		dataType: dateTime
+		formatString: Short Date
+		lineageTag: df32748f-af2f-43f0-a597-b48be38333fe
+		summarizeBy: none
+		sourceColumn: date
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	column line_idx
+		dataType: int64
+		formatString: 0
+		lineageTag: bc01000f-4a7b-4068-9c60-6e486cc3bd12
+		summarizeBy: sum
+		sourceColumn: line_idx
+
+		annotation SummarizationSetBy = Automatic
+
+	column product_key
+		dataType: string
+		lineageTag: 05524cbb-3b95-444b-ba0f-2fc81175cf34
+		summarizeBy: none
+		sourceColumn: product_key
+
+		annotation SummarizationSetBy = Automatic
+
+	column quantity
+		dataType: double
+		lineageTag: 6c049be6-aba6-4a19-949e-1d2c26566e7a
+		summarizeBy: sum
+		sourceColumn: quantity
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column unit_price
+		dataType: double
+		formatString: #,0.0\ "lei";-#,0.0\ "lei";#,0.0\ "lei"
+		lineageTag: 1e03a9af-189a-4a39-b24f-5ef1b5fc5963
+		summarizeBy: sum
+		sourceColumn: unit_price
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"currencyCulture":"ro-RO"}
+
+	column line_total
+		dataType: double
+		lineageTag: 485fa936-7939-490d-86f4-adada69e1a7c
+		summarizeBy: sum
+		sourceColumn: line_total
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column ean
+		dataType: string
+		lineageTag: 62498ac1-dcab-42ed-9f06-a2bd9b433655
+		summarizeBy: none
+		sourceColumn: ean
+
+		annotation SummarizationSetBy = Automatic
+
+	column raw_code
+		dataType: string
+		lineageTag: 4d1d00f3-3735-4e97-b3b7-b5a6eeb68a90
+		summarizeBy: none
+		sourceColumn: raw_code
+
+		annotation SummarizationSetBy = Automatic
+
+	column barcode_type
+		dataType: string
+		lineageTag: 66890da6-8b18-46ed-b50c-083bcd221697
+		summarizeBy: none
+		sourceColumn: barcode_type
+
+		annotation SummarizationSetBy = Automatic
+
+	column discount_amount
+		dataType: double
+		lineageTag: ec781e0b-f013-42b8-9384-f1807e23b383
+		summarizeBy: sum
+		sourceColumn: discount_amount
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column net_line_total
+		dataType: double
+		lineageTag: c411cdfc-3053-4a42-9fad-5bb0ab9b917a
+		summarizeBy: sum
+		sourceColumn: net_line_total
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	partition FactTable = m
+		mode: import
+		source =
+				let
+				    Source = Parquet.Document(File.Contents(#"Project folder path" & "\receipts.parquet"), [Compression=null, LegacyColumnNameEncoding=false, MaxDepth=null]),
+				    #"Changed Type" = Table.TransformColumnTypes(Source,{{"date", type date}}),
+				  #"Marked key columns" = Table.AddKey(#"Changed Type", {"ticket_id"}, false),
+				  #"Marked key columns 1" = Table.AddKey(#"Marked key columns", {"product_key"}, false)
+				in
+				    #"Marked key columns 1"
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+

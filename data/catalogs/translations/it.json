@@ -1,0 +1,31 @@
+{
+  "Fresh Food": "Prodotti Freschi",
+  "Pantry & Groceries": "Dispensa & Alimentari",
+  "Beverages": "Bevande",
+  "Frozen": "Surgelati",
+  "Sweets & Snacks": "Dolci & Snack",
+  "Non-Food": "Non Alimentare",
+  "Bakery & Bread": "Pane & Pasticceria",
+
+  "Fresh Meat & Fish": "Carne Fresca & Pesce",
+  "Fresh Fruits & Vegetables": "Frutta & Verdura Fresca",
+  "Dairy & Eggs": "Latticini & Uova",
+  "Processed Meat & Deli": "Salumi & Gastronomia",
+  "Ready Meals & Chilled Convenience": "Piatti Pronti & Gastronomia Fresca",
+  "Canned Goods & Pickles": "Conserve & Sottaceti",
+  "Baking & Cooking Ingredients": "Farine & Ingredienti Base",
+  "Sauces, Oils & Condiments": "Salse, Oli & Condimenti",
+  "Water & Soft Drinks": "Acqua & Bevande Analcoliche",
+  "Alcoholic Beverages": "Bevande Alcoliche",
+  "Coffee & Tea": "Caffè & Tè",
+  "Ice Cream & Frozen Desserts": "Gelati & Dessert Surgelati",
+  "Frozen Fruits & Vegetables": "Frutta & Verdura Surgelata",
+  "Frozen Fish & Seafood": "Pesce & Frutti di Mare Surgelati",
+  "Frozen Ready Meals & Pizza": "Pizze & Piatti Pronti Surgelati",
+  "Biscuits & Savory Snacks": "Biscotti & Snack Salati",
+  "Chocolate & Confectionery": "Cioccolato & Dolciumi",
+  "Desserts & Pastries": "Dessert & Pasticceria",
+  "Fresh Bakery & Pastry": "Pasticceria Fresca & Forno",
+  "Bread & Bakery Specialties": "Pane & Specialità da Forno"
+}
+

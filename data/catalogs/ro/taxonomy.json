@@ -1,0 +1,40 @@
+{
+  "Alimente Proaspete": [
+    "Carne Proaspătă & Pește",
+    "Făinoase & Ingrediente Preparare",
+    "Fructe & Legume Proaspete",
+    "Lactate & Ouă",
+    "Mezeluri & Procesate",
+    "Patiserie & Brutărie Caldă",
+    "Semipreparate & Ready to Eat"
+  ],
+  "Băcănie": [
+    "Conserve & Murături",
+    "Făinoase & Ingrediente Preparare",
+    "Sosuri, Ulei & Condimente"
+  ],
+  "Băuturi": [
+    "Apă & Răcoritoare",
+    "Băuturi Alcoolice",
+    "Cafea & Ceai"
+  ],
+  "Congelate": [
+    "Înghețată & Deserturi Congelate",
+    "Legume & Fructe Congelate",
+    "Pește & Fructe de Mare Congelate",
+    "Semipreparate & Pizza Congelată"
+  ],
+  "Dulciuri & Snacks": [
+    "Biscuiți & Snacks Sărate",
+    "Ciocolată, Batoane & Dulciuri",
+    "Deserturi, Eclere & Prăjituri"
+  ],
+  "Non-Alimentar": [
+    "Non-Food"
+  ],
+  "Panificație & Patiserie": [
+    "Patiserie & Brutărie Caldă",
+    "Pâine & Specialități"
+  ]
+}
+

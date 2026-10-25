@@ -1,0 +1,51 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/2.1.0/schema.json",
+  "name": "c40239fa0821eacb50a5",
+  "displayName": "Spend & Quantity",
+  "displayOption": "FitToPage",
+  "height": 1080,
+  "width": 1920,
+  "objects": {
+    "background": [
+      {
+        "properties": {
+          "color": {
+            "solid": {
+              "color": {
+                "expr": {
+                  "Literal": {
+                    "Value": "'#F1F5F9'"
+                  }
+                }
+              }
+            }
+          },
+          "transparency": {
+            "expr": {
+              "Literal": {
+                "Value": "0D"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "visualInteractions": [
+    {
+      "source": "800ee59f0378c53b3e00",
+      "target": "9f61b9eae9b43c7d3cc9",
+      "type": "DataFilter"
+    },
+    {
+      "source": "800ee59f0378c53b3e00",
+      "target": "51f88adc7bc51039c385",
+      "type": "HighlightFilter"
+    },
+    {
+      "source": "51f88adc7bc51039c385",
+      "target": "800ee59f0378c53b3e00",
+      "type": "HighlightFilter"
+    }
+  ]
+}

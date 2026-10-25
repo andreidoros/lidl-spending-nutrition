@@ -1,0 +1,123 @@
+{
+  "version": "1.1.0",
+  "diagrams": [
+    {
+      "ordinal": 0,
+      "scrollPosition": {
+        "x": 0,
+        "y": 0
+      },
+      "nodes": [
+        {
+          "location": {
+            "x": 50,
+            "y": -50
+          },
+          "nodeIndex": "FactTable",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 3
+        },
+        {
+          "location": {
+            "x": 532,
+            "y": 0
+          },
+          "nodeIndex": "DimProducts",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 2
+        },
+        {
+          "location": {
+            "x": 63,
+            "y": 530
+          },
+          "nodeIndex": "DimDate",
+          "size": {
+            "height": 200,
+            "width": 234
+          },
+          "zIndex": 1
+        },
+        {
+          "location": {
+            "x": 630.704017865066,
+            "y": 554.27063335576236
+          },
+          "nodeIndex": "dim_inflatie",
+          "nodeLineageTag": "704a4758-bd8b-4342-bda3-243660154fad",
+          "size": {
+            "height": 176,
+            "width": 234
+          },
+          "zIndex": 4
+        },
+        {
+          "location": {
+            "x": 911.21201172394967,
+            "y": 536.63330076680666
+          },
+          "nodeIndex": "SlicerInflatie",
+          "nodeLineageTag": "5cae65ec-87d6-478a-973d-74afc4afa8dc",
+          "size": {
+            "height": 200,
+            "width": 234
+          },
+          "zIndex": 0
+        },
+        {
+          "location": {
+            "x": 1052.1960240061824,
+            "y": 298.45599888343338
+          },
+          "nodeIndex": "Category_Display",
+          "nodeLineageTag": "fe2e72ac-7a75-4100-91e6-3da3ea4a1801",
+          "size": {
+            "height": 200,
+            "width": 234
+          },
+          "zIndex": 0
+        },
+        {
+          "location": {
+            "x": 1218.5480329387153,
+            "y": 667.05862163181268
+          },
+          "nodeIndex": "Time Intelligence",
+          "nodeLineageTag": "92055dbf-4c25-47a4-a8b0-6f0b3b749077",
+          "size": {
+            "height": 128,
+            "width": 234
+          },
+          "zIndex": 0
+        },
+        {
+          "location": {
+            "x": 1352.4853794847538,
+            "y": 352.0106584785114
+          },
+          "nodeIndex": "Period Selection",
+          "nodeLineageTag": "027e9a2e-059a-477b-9ba9-caf3d024d55d",
+          "size": {
+            "height": 200,
+            "width": 234
+          },
+          "zIndex": 0
+        }
+      ],
+      "name": "All tables",
+      "zoomValue": 70.95554390096882,
+      "pinKeyFieldsToTop": false,
+      "showExtraHeaderInfo": false,
+      "hideKeyFieldsWhenCollapsed": false,
+      "tablesLocked": false
+    }
+  ],
+  "selectedDiagram": "All tables",
+  "defaultDiagram": "All tables"
+}

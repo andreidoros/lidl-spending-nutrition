@@ -1,0 +1,61 @@
+# =====================================================================
+# 1. Secrets and environment variables (never commit)
+# =====================================================================
+.env
+*.env
+!.env.example
+.streamlit/secrets.toml
+
+# =====================================================================
+# 2. Python virtual environment and caches
+# =====================================================================
+.venv/
+venv/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+*.log
+
+# =====================================================================
+# 3. Local data and analytical artefacts (never commit)
+#    The repository ships code, catalogs and report definitions only.
+# =====================================================================
+*.parquet
+*.duckdb
+*.duckdb.wal
+*.pbix
+
+# Raw Lidl Plus receipts and derived worklists
+data/raw_tickets/
+raw_tickets/
+review_queue.csv
+catalog_overrides.csv
+ai_chat_batch.txt
+data.csv
+
+# Pipeline lock file
+.lidl-pipeline-operation.lock
+
+# =====================================================================
+# 4. Power BI PBIP local state
+# =====================================================================
+**/.pbi/localSettings.json
+**/.pbi/cache.abf
+
+# =====================================================================
+# 5. Editors and operating system
+# =====================================================================
+.vscode/*
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =====================================================================
+# 6. Scratch files
+# =====================================================================
+scratch/
+*.tmp

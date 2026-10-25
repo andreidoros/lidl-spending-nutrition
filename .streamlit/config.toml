@@ -1,0 +1,53 @@
+# Technical, enterprise-style identity for the local control panel.
+# Dark slate surfaces, cobalt accent, 4px corners, sans-serif only.
+# Visual configuration lives here; app.py adds only the few rules that the
+# native theme cannot express (container width, JSON textarea, status badge).
+
+[client]
+# Hide Streamlit's developer chrome (Deploy, rerun, cache controls).
+toolbarMode = "viewer"
+
+[theme]
+base = "dark"
+primaryColor = "#0050AA"
+backgroundColor = "#0F172A"
+secondaryBackgroundColor = "#1E293B"
+textColor = "#F8FAFC"
+borderColor = "#334155"
+linkColor = "#93C5FD"
+linkUnderline = true
+
+blueColor = "#0050AA"
+greenColor = "#3F7A4B"
+yellowColor = "#FACC15"
+orangeColor = "#D97706"
+redColor = "#E60A14"
+grayColor = "#94A3B8"
+
+font = "sans-serif"
+headingFont = "sans-serif"
+headingFontWeights = [600, 600, 600, 600, 600, 600]
+baseFontSize = 16
+
+baseRadius = "4px"
+buttonRadius = "4px"
+showWidgetBorder = true
+showSidebarBorder = false
+
+dataframeBorderColor = "#334155"
+dataframeHeaderBackgroundColor = "#1E293B"
+dataframeHeaderTextColor = "#E2E8F0"
+
+paddingTop = "2rem"
+paddingBottom = "2rem"
+
+chartCategoricalColors = [
+    "#0050AA",
+    "#D97706",
+    "#0F172A",
+    "#475569",
+    "#0284C7",
+    "#E60A14",
+    "#94A3B8",
+    "#CBD5E1",
+]

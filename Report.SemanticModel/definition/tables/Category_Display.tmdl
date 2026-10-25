@@ -1,0 +1,183 @@
+table Category_Display
+	lineageTag: fe2e72ac-7a75-4100-91e6-3da3ea4a1801
+
+	measure 'Total Spend (Top 5 + Altele)' = ```
+			
+			VAR _TopN = 5
+			VAR _CurrentCategoryInLegend = SELECTEDVALUE ( Category_Display[Category_Display] )
+			
+			-- 1. Evaluăm Top 5 categorii pe baza cheltuielilor totale din perioada selectată
+			VAR _AllCategories = 
+			    ALLSELECTED ( DimProducts[category] )
+			
+			VAR _TopCategories = 
+			    TOPN (
+			        _TopN,
+			        _AllCategories,
+			        CALCULATE ( [Total Spend], ALLSELECTED ( 'DimDate'[MonthName] ) ),
+			        DESC
+			    )
+			
+			-- 2. Identificăm categoriile din afara Top 5
+			VAR _OtherCategories = 
+			    EXCEPT ( _AllCategories, _TopCategories )
+			
+			RETURN
+			    SWITCH (
+			        TRUE (),
+			        -- Caz 1: Categoria din legendă se află în Top 5 -> afișează valoarea ei pe luna respectivă
+			        _CurrentCategoryInLegend IN _TopCategories,
+			            CALCULATE (
+			                [Total Spend],
+			                TREATAS ( { _CurrentCategoryInLegend }, DimProducts[category] )
+			            ),
+			
+			        -- Caz 2: Categoria din legendă este "Other" -> sumează restul de 11 categorii pentru acea lună
+			        _CurrentCategoryInLegend = "Other",
+			            CALCULATE (
+			                [Total Spend],
+			                TREATAS ( _OtherCategories, DimProducts[category] )
+			            ),
+			
+			        -- Caz 3: Restul categoriilor din afara Top 5 returnează BLANK (Power BI le elimină automat din vizual)
+			        BLANK ()
+			    )
+			```
+		lineageTag: 0d7f285f-c0ed-4f0f-89ff-f31e7ba19819
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure '% Spend per Month' =
+			
+			DIVIDE (
+			    [Total Spend],
+			    CALCULATE ( [Total Spend], ALLSELECTED ( DimProducts[category] ) )
+			)
+		formatString: 0%;-0%;0%
+		lineageTag: ae016ccf-82df-424a-9afe-2bc8f1f825eb
+
+	measure 'Spend MoM Diff' =
+			
+			VAR _Current = [Total Spend]
+			VAR _Previous = CALCULATE ( [Total Spend], DATEADD ( 'DimDate'[Date], -1, MONTH ) )
+			RETURN
+			    IF ( NOT ISBLANK ( _Current ), _Current - COALESCE ( _Previous, 0 ) )
+		formatString: #,0.0\ "lei";-#,0.0\ "lei";#,0.0\ "lei"
+		lineageTag: 363ee134-0e4c-482c-aa81-3f6ac89264c5
+
+		annotation PBI_FormatHint = {"currencyCulture":"ro-RO"}
+
+	measure 'Spend YoY Diff' =
+			
+			VAR _Current = [Total Spend]
+			VAR _Previous = CALCULATE ( [Total Spend], DATEADD ( 'DimDate'[Date], -1, YEAR ) )
+			RETURN
+			    IF ( NOT ISBLANK ( _Current ), _Current - COALESCE ( _Previous, 0 ) )
+		lineageTag: 1c81a918-4472-4fb8-bc66-5685530ec64e
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Spend QoQ Diff' =
+			
+			VAR _Current = [Total Spend]
+			VAR _Previous = CALCULATE ( [Total Spend], DATEADD ( 'DimDate'[Date], -1, QUARTER ) )
+			RETURN
+			    IF ( NOT ISBLANK ( _Current ), _Current - COALESCE ( _Previous, 0 ) )
+		lineageTag: 94310830-aa6e-442e-a074-0508ddf32849
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Spend Previous Period' = ```
+			
+			VAR _SelectedPeriod = SELECTEDVALUE ( 'Period Selection'[Period], "Same Period Last Month" )
+			
+			-- Variabile de suport pentru săptămâna anterioară (LW)
+			VAR _MinDate = MIN ( 'DimDate'[Date] )
+			VAR _StartCurrentWeek = _MinDate - WEEKDAY ( _MinDate, 2 ) + 1
+			VAR _StartLastWeek    = _StartCurrentWeek - 7
+			VAR _EndLastWeek      = _StartLastWeek + 6
+			
+			RETURN
+			    SWITCH (
+			        _SelectedPeriod,
+			        
+			        -- Luna anterioară (Translație sau Bloc Complet)
+			        "Same Period Last Month", CALCULATE ( [Total Spend], DATEADD ( 'DimDate'[Date], -1, MONTH ) ),
+			        "Last Month",   CALCULATE ( [Total Spend], PREVIOUSMONTH ( 'DimDate'[Date] ) ),
+			
+			        -- Trimestrul anterior
+			        "Same Period Last Quarter", CALCULATE ( [Total Spend], DATEADD ( 'DimDate'[Date], -1, QUARTER ) ),
+			        "Last Quarter",   CALCULATE ( [Total Spend], PREVIOUSQUARTER ( 'DimDate'[Date] ) ),
+			
+			        -- Anul anterior
+			        "Same Period Last Year", CALCULATE ( [Total Spend], DATEADD ( 'DimDate'[Date], -1, YEAR ) ),
+			        "Last Year",   CALCULATE ( [Total Spend], PREVIOUSYEAR ( 'DimDate'[Date] ) ),
+			
+			        -- Săptămâna anterioară
+			        "Same Period Last Week", CALCULATE ( [Total Spend], DATEADD ( 'DimDate'[Date], -7, DAY ) ),
+			        "Last Weeek",   CALCULATE ( 
+			                    [Total Spend], 
+			                    REMOVEFILTERS ( 'DimDate' ), 
+			                    'DimDate'[Date] >= _StartLastWeek, 
+			                    'DimDate'[Date] <= _EndLastWeek 
+			                ),
+			
+			        -- Fallback de siguranță
+			        CALCULATE ( [Total Spend], DATEADD ( 'DimDate'[Date], -1, MONTH ) )
+			    )
+			```
+		lineageTag: e7c47b62-69a8-44bd-8e4b-1e9f117b9d86
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Spend POP Diff.' =
+			
+			VAR _Current = [Total Spend]
+			VAR _Prior = [Spend Previous Period]
+			RETURN
+			    IF (
+			        NOT ISBLANK ( _Current ),
+			        _Current - COALESCE ( _Prior, 0 )
+			    )
+		lineageTag: b3b2d6df-4dd0-462b-9f2e-f6688ae093af
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	measure 'Spend PoP %' =
+			
+			VAR _Current = [Total Spend]
+			VAR _Prior = [Spend Previous Period]
+			RETURN
+			    DIVIDE ( _Current - _Prior, _Prior )
+		formatString: 0.0%;-0.0%;0.0%
+		lineageTag: 1f0fa781-8b99-4139-bb70-76683302ca06
+
+	column Category_Display
+		lineageTag: 1b34f098-bc7e-4a14-a570-46bf15919266
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [Category_Display]
+
+		annotation SummarizationSetBy = Automatic
+
+	partition Category_Display = calculated
+		mode: import
+		source = ```
+				
+				VAR _DistinctCats = 
+				    SELECTCOLUMNS (
+				        FILTER (
+				            DISTINCT ( DimProducts[category] ),
+				            NOT ( ISBLANK ( DimProducts[category] ) )
+				        ),
+				        "Category_Display", DimProducts[category]
+				    )
+				RETURN
+				    UNION (
+				        _DistinctCats,
+				        ROW ( "Category_Display", "Other" )
+				    )
+				```
+
+	annotation PBI_Id = 543ce4ea7c3241048cc4ccf5712b0340
+

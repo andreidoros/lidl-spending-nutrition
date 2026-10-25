@@ -1,0 +1,221 @@
+table DimProducts
+	lineageTag: 0c0d070d-e8cd-45de-a4ee-487a652cb1ae
+
+	column product_key
+		dataType: string
+		lineageTag: 0fb8b015-570b-4902-b21d-c1a85bb33f85
+		summarizeBy: none
+		sourceColumn: product_key
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Product Name'
+		dataType: string
+		lineageTag: 83ce551c-1f03-46ba-afa9-1742e54ca2c6
+		summarizeBy: none
+		sourceColumn: Product Name
+
+		annotation SummarizationSetBy = Automatic
+
+	column off_product_name
+		dataType: string
+		lineageTag: c1d8b156-7dab-45bf-975b-f0b7bfec8148
+		summarizeBy: none
+		sourceColumn: off_product_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column kcal_100g
+		dataType: double
+		lineageTag: 6ccc5a7f-abc9-4093-a8c5-4812728bdea1
+		summarizeBy: none
+		sourceColumn: kcal_100g
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column proteins_100g
+		dataType: double
+		lineageTag: 8a45b73b-1856-4310-b979-9e194f0dd076
+		summarizeBy: none
+		sourceColumn: proteins_100g
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column carbs_100g
+		dataType: double
+		lineageTag: 130175c4-e952-4259-8a34-ed1f8a636843
+		summarizeBy: none
+		sourceColumn: carbs_100g
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column sugars_100g
+		dataType: double
+		lineageTag: cf3f361e-bf7c-45c4-a71f-ec687156b865
+		summarizeBy: none
+		sourceColumn: sugars_100g
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column fat_100g
+		dataType: double
+		lineageTag: abcda920-fa20-43cf-849b-c0455a10211b
+		summarizeBy: none
+		sourceColumn: fat_100g
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column saturated_fat_100g
+		dataType: double
+		lineageTag: f5558cf0-cc8f-4e85-8d27-afc72ec8f491
+		summarizeBy: none
+		sourceColumn: saturated_fat_100g
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column fiber_100g
+		dataType: double
+		lineageTag: 8d25faed-b677-4134-b5ad-36ecabbf4366
+		summarizeBy: none
+		sourceColumn: fiber_100g
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column salt_100g
+		dataType: double
+		lineageTag: 07c978e0-8bed-4e4d-80a5-a211b61276d6
+		summarizeBy: none
+		sourceColumn: salt_100g
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column match_status
+		dataType: string
+		lineageTag: 95c987ae-68ce-4707-a566-2c109997b344
+		summarizeBy: none
+		sourceColumn: match_status
+
+		annotation SummarizationSetBy = Automatic
+
+	column data_source
+		dataType: string
+		lineageTag: 4c897c85-61cf-4a2c-99a0-485b8abeac9a
+		summarizeBy: none
+		sourceColumn: data_source
+
+		annotation SummarizationSetBy = Automatic
+
+	column package_weight_g
+		dataType: double
+		formatString: #,0
+		lineageTag: 14d203a3-6343-4446-bafa-5fdd5901a5b7
+		summarizeBy: none
+		sourceColumn: package_weight_g
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isDecimal":true}
+
+	column is_weighed_default
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		lineageTag: d80f06c0-b38b-4eb1-933c-3078b0ed22e0
+		summarizeBy: none
+		sourceColumn: is_weighed_default
+
+		annotation SummarizationSetBy = Automatic
+
+	column Nutriscore_Score
+		dataType: string
+		lineageTag: 8646a9b7-fc4f-4770-8234-8adc05bf0f4a
+		summarizeBy: none
+		sourceColumn: Nutriscore_Score
+
+		annotation SummarizationSetBy = Automatic
+
+	column Nutriscore_Grade
+		dataType: string
+		lineageTag: f2f5260e-d692-41d2-8fa2-dfd0af4bc91b
+		summarizeBy: none
+		sourceColumn: Nutriscore_Grade
+
+		annotation SummarizationSetBy = Automatic
+
+	column Nutriscore_Model
+		dataType: string
+		lineageTag: c5f66aa9-8ad9-46db-a426-068419a0915e
+		summarizeBy: none
+		sourceColumn: Nutriscore_Model
+
+		annotation SummarizationSetBy = Automatic
+
+	column macro_category
+		dataType: string
+		lineageTag: 84de9c01-6b3b-4fb9-b2e7-7bdc5aa75fbd
+		summarizeBy: none
+		sourceColumn: macro_category
+
+		annotation SummarizationSetBy = Automatic
+
+	column category
+		dataType: string
+		lineageTag: 6a74a97f-0aa0-4979-a0da-a1738979facd
+		summarizeBy: none
+		sourceColumn: category
+
+		annotation SummarizationSetBy = Automatic
+
+	column macro_category_local
+		dataType: string
+		lineageTag: deecb607-01cc-4bf6-b34c-6d6807fd0daf
+		summarizeBy: none
+		sourceColumn: macro_category_local
+
+		annotation SummarizationSetBy = Automatic
+
+	column category_local
+		dataType: string
+		lineageTag: 00056613-3862-47b6-b1e4-955cad9a781a
+		summarizeBy: none
+		sourceColumn: category_local
+
+		annotation SummarizationSetBy = Automatic
+
+	partition DimProducts = m
+		mode: import
+		source =
+				let
+				    Source = Parquet.Document(File.Contents(#"Project folder path" & "\products.parquet"), [Compression=null, LegacyColumnNameEncoding=false, MaxDepth=null]),
+				    #"Uppercased Text" = Table.TransformColumns(Source,{{"nutriscore_grade", Text.Upper, type text}}),
+				    #"Renamed Columns" = Table.RenameColumns(#"Uppercased Text",{{"final_product_name", "off_product_name"}, {"store_product_name", "Product Name"}}),
+				  #"Removed duplicates" = Table.Distinct(#"Renamed Columns", {"product_key"}),
+				  #"Replaced value" = Table.ReplaceValue(#"Removed duplicates", null, 0, Replacer.ReplaceValue, {"kcal_100g", "proteins_100g", "carbs_100g", "sugars_100g", "fat_100g", "saturated_fat_100g"}),
+				  #"Replaced value 1" = Table.ReplaceValue(#"Replaced value", null, 0, Replacer.ReplaceValue, {"fiber_100g", "salt_100g"}),
+				  #"Added custom" = Table.AddColumn(#"Replaced value 1", "Nutriscore_calculated", each fnNutriscore(_)),
+				  #"Removed columns 1" = Table.RemoveColumns(#"Added custom", {"nutriscore_grade"}),
+				  #"Expanded Nutriscore_calculated" = Table.ExpandRecordColumn(#"Removed columns 1", "Nutriscore_calculated", {"Nutriscore_Score", "Nutriscore_Grade", "Nutriscore_Model"}, {"Nutriscore_Score.1", "Nutriscore_Grade", "Nutriscore_Model"}),
+				  #"Removed columns 2" = Table.RemoveColumns(#"Expanded Nutriscore_calculated", {"nutriscore_score"}),
+				  #"Renamed columns 1" = Table.RenameColumns(#"Removed columns 2", {{"Nutriscore_Score.1", "Nutriscore_Score"}})
+				in
+				    #"Renamed columns 1"
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Table
+

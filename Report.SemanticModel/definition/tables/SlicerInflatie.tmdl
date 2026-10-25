@@ -1,0 +1,39 @@
+table SlicerInflatie
+	isHidden
+	lineageTag: 5cae65ec-87d6-478a-973d-74afc4afa8dc
+
+	column Optiune
+		isHidden
+		lineageTag: ef819b5e-845e-4158-9272-1604f24f386c
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [Optiune]
+		sortByColumn: Ordine
+
+		annotation SummarizationSetBy = Automatic
+
+	column Ordine
+		isHidden
+		formatString: 0
+		lineageTag: d0399e37-ab9f-4a88-91a1-8955b2b91ec1
+		summarizeBy: sum
+		isNameInferred
+		sourceColumn: [Ordine]
+
+		annotation SummarizationSetBy = Automatic
+
+	partition SlicerInflatie = calculated
+		mode: import
+		source =
+				
+				DATATABLE (
+				    "Optiune", STRING,
+				    "Ordine", INTEGER,
+				    {
+				        { "Nominal (Preț Istoric)", 1 },
+				        { "Ajustat la Inflație (Preț Curent)", 2 }
+				    }
+				)
+
+	annotation PBI_Id = 6978dd0f1e2f438a953c3e399bd864cf
+

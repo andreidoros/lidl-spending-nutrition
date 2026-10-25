@@ -1,0 +1,8 @@
+relationship AutoDetected_b8d75a63-0443-4a19-8f55-600a938b2054
+	fromColumn: FactTable.product_key
+	toColumn: DimProducts.product_key
+
+relationship 5cbe8726-7696-6580-a733-ab37cabb8810
+	fromColumn: FactTable.date
+	toColumn: DimDate.Date
+

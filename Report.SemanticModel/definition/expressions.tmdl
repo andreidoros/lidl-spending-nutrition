@@ -1,0 +1,167 @@
+expression fnNutriscore =
+		// fnNutriScore2023 - Nutri-Score, algoritmul actualizat 2023 (Santé publique France)
+		// Utilizare: creezi o interogare goala (Blank Query), lipesti tot codul in Advanced Editor, o numesti fnNutriScore2023.
+		//   Apoi: Table.AddColumn(Sursa, "NS", each fnNutriScore2023(_))  ->  expand Nutriscore_Score / Nutriscore_Grade / Nutriscore_Model
+		// Coloane folosite: Product Name, category, kcal_100g, sugars_100g, saturated_fat_100g, salt_100g (obligatorii),
+		//                   fat_100g, fiber_100g, proteins_100g (optionale; lipsa = 0),
+		//                   fvl_pct (optional: % fructe/legume/leguminoase/nuci; daca exista, suprascrie euristicile).
+		(row as record) as record =>
+		let
+		    // ===== 0. Praguri oficiale 2023 =====
+		    E_TH       = {335, 670, 1005, 1340, 1675, 2010, 2345, 2680, 3015, 3350},          // energie kJ (alimente)
+		    SUG_TH     = {3.4, 6.8, 10, 14, 17, 20, 24, 27, 31, 34, 37, 41, 44, 48, 51},     // zaharuri g (alimente, grasimi)
+		    SAT_TH     = {1..10},                                                              // grasimi saturate g
+		    SALT_TH    = List.Transform({1..20}, each Number.Round(_ * 0.2, 1)),               // sare g, pasi de 0.2 pana la 4.0
+		    PRO_TH     = {2.4, 4.8, 7.2, 9.6, 12, 14, 17},                                     // proteine g (alimente, grasimi)
+		    FIB_TH     = {3.0, 4.1, 5.2, 6.3, 7.4},                                            // fibre g
+		    BEV_E_TH   = {30, 90, 150, 210, 240, 270, 300, 330, 360, 390},                     // energie kJ/100ml (bauturi)
+		    BEV_SUG_TH = {0.5, 2, 3.5, 5, 6, 7, 8, 9, 10, 11},                                 // zaharuri g/100ml (bauturi)
+		    BEV_PRO_TH = {1.2, 1.5, 1.8, 2.1, 2.4, 2.7, 3.0},                                  // proteine g/100ml (bauturi)
+		    SATE_TH    = List.Transform({1..10}, each _ * 120),                                // energie din saturate kJ (grasimi/nuci)
+		    RATIO_TH   = {10, 16, 22, 28, 34, 40, 46, 52, 58, 64},                             // saturate/lipide % (grasimi/nuci)
+		
+		    // ===== 1. Cuvinte-cheie (euristici pe nume/categorie; editabile) =====
+		    SPICE_KW  = {" sare ", " piper ", " boia ", " oregano ", " cimbru ", " scortisoara ", " dafin ", " chilli ", " bicarbonat ", " praf de copt ", " indulcitor ", " turmeric ", " ghimbir ", " busuioc ", " rozmarin ", " paprika ", " cuisoare ", " nucsoara "},
+		    NUT_KW    = {"migdal", "alune", "nuci", "nuca", "caju", "fistic", "arahid", "seminte", "susan", "pecan", "macadamia"},
+		    FAT_KW    = {" ulei ", " unt ", " margarina ", " untura ", " ghee ", " smalt "},
+		    CHEESE_KW = {"branz", "cascaval", "telemea", "mozzarella", "parmez", "parmigiano", "reggiano", "grana padano", "cheddar", "gouda", "emmental", "camembert", "gorgonzola", "halloumi", "burduf", "mascarpone", "ricotta", "cottage", "pecorino", "gruyere", "raclette", "maasdam", "jarlsberg", "provolone", "manchego", "roquefort", " feta ", " urda ", " brie ", " edam "},
+		    PF_KW     = {" pui ", " curcan ", " rata ", " gasca ", " peste ", " somon ", " pastrav ", " ton ", " creveti ", " crap ", " macrou ", " hering ", " dorada ", " biban ", " calamar ", " scoici ", " cod ", " sardine ", " pangasius ", " merluciu ", " icre "},
+		    SWEET_KW  = {" zero ", " light ", " ligh ", " diet ", " max ", " fara zahar ", " fara zaharuri ", " sugar free "},
+		
+		    // ===== 2. Functii ajutatoare =====
+		    pts   = (v as number, th as list) as number => List.Count(List.Select(th, each v > _)),
+		    ptsGE = (v as number, th as list) as number => List.Count(List.Select(th, each v >= _)),
+		    accents = {{"ă","a"}, {"â","a"}, {"î","i"}, {"ș","s"}, {"ş","s"}, {"ț","t"}, {"ţ","t"}},
+		    puncts  = {".", ",", "/", "-", "_", "(", ")", "%", "&", "+", ":", ";"},
+		    norm = (t as text) as text =>
+		        let
+		            a = List.Accumulate(accents, Text.Lower(t), (s, p) => Text.Replace(s, p{0}, p{1})),
+		            b = List.Accumulate(puncts, a, (s, c) => Text.Replace(s, c, " ")),
+		            parts = List.Select(Text.Split(b, " "), each _ <> "")
+		        in
+		            " " & Text.Combine(parts, " ") & " ",
+		    hasSub = (txt as text, kws as list) as logical => List.AnyTrue(List.Transform(kws, each Text.Contains(txt, _))),
+		    num = (field as text) as nullable number =>
+		        let v = Record.FieldOrDefault(row, field, null)
+		        in if v is number then v else try Number.From(v) otherwise null,
+		    fvlPts = (p as number) as number => if p > 80 then 5 else if p > 60 then 2 else if p > 40 then 1 else 0,
+		
+		    // ===== 3. Citire date =====
+		    name_field = List.First(List.Select(Record.FieldNames(row), each Text.Contains(_, "Product Name") or _ = "name"), null),
+		    name_raw   = if name_field = null then "" else (Text.From(Record.Field(row, name_field)) ?? ""),
+		    name_n     = norm(name_raw),
+		    cat_n      = norm(Text.From(Record.FieldOrDefault(row, "category", "")) ?? ""),
+		
+		    kcal_n = num("kcal_100g"),
+		    sug_n  = num("sugars_100g"),
+		    sat_n  = num("saturated_fat_100g"),
+		    salt_n = num("salt_100g"),
+		    incomplete = kcal_n = null or sug_n = null or sat_n = null or salt_n = null,
+		
+		    kcal = kcal_n ?? 0,
+		    sug  = sug_n ?? 0,
+		    sat  = sat_n ?? 0,
+		    salt = salt_n ?? 0,
+		    fat  = num("fat_100g") ?? 0,
+		    fib  = num("fiber_100g") ?? 0,
+		    pro  = num("proteins_100g") ?? 0,
+		    kj   = kcal * 4.184,
+		    fvl_override = num("fvl_pct"),
+		
+		    // % din nume (ex. "Nectar mere 50%", "Suc de ananas 100%")
+		    pct_from_name =
+		        let
+		            pos    = Text.PositionOf(name_raw, "%"),
+		            before = if pos < 1 then "" else Text.Start(name_raw, pos),
+		            rev    = List.Reverse(Text.ToList(before)),
+		            digs   = List.FirstN(rev, each _ >= "0" and _ <= "9"),
+		            txt    = Text.Combine(List.Reverse(digs)),
+		            val    = if txt = "" then null else try Number.FromText(txt) otherwise null
+		        in
+		            val,
+		
+		    // ===== 4. Clasificare produs =====
+		    isFreshVeg  = hasSub(cat_n, {"fructe legume proaspete", "legume fructe congelate", "fresh fruits vegetables", "frozen fruits vegetables"}),
+		    isAlcohol   = hasSub(cat_n, {"bauturi alcoolice", "alcoholic beverages"}),
+		    isNonFood   = hasSub(cat_n, {"non food", "non alimentar"}),
+		    isCoffeeTea = hasSub(cat_n, {"cafea ceai", "coffee tea"}),
+		    isSpiceLike = (hasSub(cat_n, {"sosuri ulei condimente", "fainoase ingrediente", "sauces oils condiments", "baking cooking ingredients"}) and hasSub(name_n, SPICE_KW)
+		                   and not hasSub(name_n, {" sos ", " ketchup ", " mustar "}))
+		                  or hasSub(name_n, {" gheata ", " ice "}),
+		    isRtdCoffee = isCoffeeTea and hasSub(name_n, {" bautura ", " ice ", " drink "}),     // cafea/ceai gata de baut = bautura
+		    excluded    = isAlcohol or (isCoffeeTea and not isRtdCoffee and sug < 10) or isSpiceLike or isNonFood,
+		
+		    isBevCat    = hasSub(cat_n, {"apa racoritoare", "water soft drinks"}),
+		    isMilkDrink = hasSub(cat_n, {"lactate oua", "dairy eggs"})
+		                  and ((hasSub(name_n, {" lapte "}) and kcal <= 120) or hasSub(name_n, {" kefir "}) or (hasSub(name_n, {" iaurt "}) and hasSub(name_n, {" baut ", " drink "}))),
+		    isBeverage  = isBevCat or isMilkDrink or isRtdCoffee,
+		    hasSweetener = isBeverage and hasSub(name_n, SWEET_KW),
+		    isWater     = isBevCat and kcal = 0 and sug = 0 and not hasSweetener
+		                  and hasSub(name_n, {" apa ", " minerala "}) and not hasSub(name_n, {" tonic ", " tonica "}),
+		
+		    isNut     = not isBeverage and hasSub(name_n, NUT_KW) and sug <= 15 and fat >= 35,
+		    isOilFat  = not isBeverage and hasSub(name_n, FAT_KW) and fat >= 55,
+		    isFats    = isNut or isOilFat,
+		    isCheese  = not isBeverage and hasSub(cat_n, {"lactate oua", "dairy eggs"}) and hasSub(name_n, CHEESE_KW),
+		    isRedMeat = hasSub(cat_n, {"carne proaspata peste", "mezeluri procesate", "fresh meat fish", "processed meat deli"}) and not hasSub(name_n, PF_KW),
+		
+		    // ===== 5. Puncte comune pozitive =====
+		    fib_p = pts(fib, FIB_TH),
+		    pro_p = pts(pro, PRO_TH),
+		
+		    // ----- 5a. Bauturi (A doar pentru apa plata; B<=2, C<=6, D<=9, E>=10) -----
+		    bev_fvl = fvl_override ?? (if hasSub(name_n, {" suc ", " nectar "}) then pct_from_name else null) ?? 0,
+		    b_N = pts(kj, BEV_E_TH) + pts(sug, BEV_SUG_TH) + pts(sat, SAT_TH) + pts(salt, SALT_TH) + (if hasSweetener then 4 else 0),
+		    b_P = fib_p + pts(pro, BEV_PRO_TH) + (if bev_fvl > 80 then 6 else if bev_fvl > 60 then 4 else if bev_fvl > 40 then 2 else 0),
+		    b_score = b_N - b_P,
+		    b_grade = if isWater then "A" else if b_score <= 2 then "B" else if b_score <= 6 then "C" else if b_score <= 9 then "D" else "E",
+		
+		    // ----- 5b. Grasimi, uleiuri, nuci, seminte (A<=-6, B<=2, C<=10, D<=18, E>=19) -----
+		    f_ratio = if fat > 0 then sat / fat * 100 else 0,
+		    f_fvl   = fvl_override ?? (if isNut then 100 else 0),
+		    f_N     = pts(sat * 37, SATE_TH) + pts(sug, SUG_TH) + ptsGE(f_ratio, RATIO_TH) + pts(salt, SALT_TH),
+		    f_score = if f_N < 7 then f_N - (fib_p + pro_p + fvlPts(f_fvl)) else f_N - fib_p - fvlPts(f_fvl),
+		    f_grade = if f_score <= -6 then "A" else if f_score <= 2 then "B" else if f_score <= 10 then "C" else if f_score <= 18 then "D" else "E",
+		
+		    // ----- 5c. Alimente generale (A<=0, B<=2, C<=10, D<=18, E>=19) -----
+		    g_fvl   = fvl_override ?? (if isFreshVeg then 100 else 0),
+		    g_N     = pts(kj, E_TH) + pts(sug, SUG_TH) + pts(sat, SAT_TH) + pts(salt, SALT_TH),
+		    g_pro   = if isRedMeat and pro_p > 2 then 2 else pro_p,          // carne rosie: maxim 2 puncte proteine
+		    g_score = if g_N < 11 or isCheese then g_N - (fib_p + g_pro + fvlPts(g_fvl)) else g_N - fib_p - fvlPts(g_fvl),
+		    g_grade = if g_score <= 0 then "A" else if g_score <= 2 then "B" else if g_score <= 10 then "C" else if g_score <= 18 then "D" else "E"
+		in
+		    if incomplete then [Nutriscore_Score = null, Nutriscore_Grade = null, Nutriscore_Model = "Incomplete data"]
+		    else if excluded then [Nutriscore_Score = null, Nutriscore_Grade = null, Nutriscore_Model = "Excluded"]
+		    else if isBeverage then [Nutriscore_Score = b_score, Nutriscore_Grade = b_grade, Nutriscore_Model = if isWater then "Water" else "Beverage"]
+		    else if isFats then [Nutriscore_Score = f_score, Nutriscore_Grade = f_grade, Nutriscore_Model = "Fats/nuts/seeds"]
+		    else [Nutriscore_Score = g_score, Nutriscore_Grade = g_grade, Nutriscore_Model = if isCheese then "Cheese" else if isRedMeat then "Red meat" else "General food"]
+	lineageTag: 85da18cd-44bb-44b2-ac4a-a33bcdec3fef
+
+	annotation PBI_ResultType = Function
+
+expression 'Errors in DimProducts' =
+		let
+		Source = DimProducts,
+		  #"Detected Type Mismatches" = let
+		    tableWithOnlyPrimitiveTypes = Table.SelectColumns(Source, Table.ColumnsOfType(Source, {type nullable number, type nullable text, type nullable logical, type nullable date, type nullable datetime, type nullable datetimezone, type nullable time, type nullable duration})),
+		    recordTypeFields = Type.RecordFields(Type.TableRow(Value.Type(tableWithOnlyPrimitiveTypes))),
+		    fieldNames = Record.FieldNames(recordTypeFields),
+		    fieldTypes = List.Transform(Record.ToList(recordTypeFields), each [Type]),
+		    pairs = List.Transform(List.Positions(fieldNames), (i) => {fieldNames{i}, (v) => if v = null or Value.Is(v, fieldTypes{i}) then v else error [Message = "The type of the value does not match the type of the column.", Detail = v], fieldTypes{i}})
+		in
+		    Table.TransformColumns(Source, pairs),
+		  #"Added Index" = Table.AddIndexColumn(#"Detected Type Mismatches", "Row Number" ,1),
+		  #"Kept Errors" = Table.SelectRowsWithErrors(#"Added Index", {"product_key", "Product Name", "off_product_name", "macro_category", "category", "macro_category_local", "category_local", "kcal_100g", "proteins_100g", "carbs_100g", "sugars_100g", "fat_100g", "saturated_fat_100g", "fiber_100g", "salt_100g", "package_weight_g", "is_weighed_default", "match_status", "data_source", "Nutriscore_Score", "Nutriscore_Grade", "Nutriscore_Model"}),
+		  #"Reordered Columns" = Table.ReorderColumns(#"Kept Errors", {"Row Number", "product_key", "Product Name", "off_product_name", "macro_category", "category", "macro_category_local", "category_local", "kcal_100g", "proteins_100g", "carbs_100g", "sugars_100g", "fat_100g", "saturated_fat_100g", "fiber_100g", "salt_100g", "package_weight_g", "is_weighed_default", "match_status", "data_source", "Nutriscore_Score", "Nutriscore_Grade", "Nutriscore_Model"})
+		in
+		  #"Reordered Columns"
+	lineageTag: fb696e2f-c53e-4600-840a-883ad3e02f3c
+	queryGroup: 'Query Errors - 10/23/2026 4:27:30 PM'
+
+	annotation PBI_ResultType = Table
+
+expression 'Project folder path' = "C:\path\to\Lidl-Report" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=false]
+	lineageTag: 877bafaf-5e8a-44da-90d7-a84a9881c30d
+
+	annotation PBI_ResultType = Text
+

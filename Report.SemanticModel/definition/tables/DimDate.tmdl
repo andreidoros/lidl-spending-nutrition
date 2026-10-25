@@ -1,0 +1,344 @@
+table DimDate
+	lineageTag: 73eb7a79-2764-4a76-a583-bb9fa11b3e4b
+	dataCategory: Time
+
+	column Date
+		isKey
+		formatString: Short Date
+		lineageTag: a8ccfea9-9493-41ce-9a7f-e6b9548a8c2d
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [Date]
+
+		annotation SummarizationSetBy = Automatic
+
+	column DateKey
+		formatString: 0
+		lineageTag: 1b421079-d2a5-4d55-9dce-9f4180251620
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [DateKey]
+
+		annotation SummarizationSetBy = Automatic
+
+	column Year
+		formatString: 0
+		lineageTag: 76622f83-283c-40cd-b77b-41e1f398fcf8
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [Year]
+
+		annotation SummarizationSetBy = Automatic
+
+	column QuarterNumber
+		formatString: 0
+		lineageTag: d7c7e7c0-886c-4109-a85a-cd497d3082e7
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [QuarterNumber]
+
+		annotation SummarizationSetBy = Automatic
+
+	column Quarter
+		lineageTag: 2685bd63-33ba-4afb-887a-8118e2c81db2
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [Quarter]
+		sortByColumn: QuarterNumber
+
+		annotation SummarizationSetBy = Automatic
+
+	column QuarterYear
+		lineageTag: e6a28399-28bf-4c90-874c-345acc53c4a4
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [QuarterYear]
+
+		annotation SummarizationSetBy = Automatic
+
+	column QuarterYearKey
+		formatString: 0
+		lineageTag: deb7d76d-b087-4394-9aa3-2683b046400b
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [QuarterYearKey]
+
+		annotation SummarizationSetBy = Automatic
+
+	column MonthNumber
+		formatString: 0
+		lineageTag: 624b7788-9a2a-4e39-a32e-079f5f191788
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [MonthNumber]
+
+		annotation SummarizationSetBy = Automatic
+
+	column MonthName
+		lineageTag: 561c5424-6b15-4e89-b854-cc30319f32e7
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [MonthName]
+		sortByColumn: MonthNumber
+
+		annotation SummarizationSetBy = Automatic
+
+	column MonthYear
+		lineageTag: 257a79a0-3002-43ad-92a6-d51513484575
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [MonthYear]
+		sortByColumn: MonthYearKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column MonthYearKey
+		formatString: 0
+		lineageTag: eef27ad9-0144-4407-88f6-8e9e51d3d9e4
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [MonthYearKey]
+
+		annotation SummarizationSetBy = Automatic
+
+	column DayOfMonth
+		formatString: 0
+		lineageTag: 8ca183ac-816d-4874-8e11-8f97977b0d02
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [DayOfMonth]
+
+		annotation SummarizationSetBy = Automatic
+
+	column DayOfWeekNumber
+		formatString: 0
+		lineageTag: 5b578baf-5ca2-4c4c-ac89-0c3803bc3c4a
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [DayOfWeekNumber]
+
+		annotation SummarizationSetBy = Automatic
+
+	column DayOfWeekName
+		lineageTag: 540aceca-8360-4431-a8d3-00f37c9dce02
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [DayOfWeekName]
+		sortByColumn: DayOfWeekNumber
+
+		annotation SummarizationSetBy = Automatic
+
+	column WeekNumber
+		formatString: 0
+		lineageTag: fdba22f5-2558-4f31-bf38-d03e91fbbd4b
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [WeekNumber]
+
+		annotation SummarizationSetBy = Automatic
+
+	column WeekYear
+		lineageTag: 5644d7d9-a7c4-45dc-b8f5-111cd4673577
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [WeekYear]
+		sortByColumn: WeekYearKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column WeekYearKey
+		formatString: 0
+		lineageTag: c604a9ce-f9eb-467d-988e-52d166cc93a8
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [WeekYearKey]
+
+		annotation SummarizationSetBy = Automatic
+
+	column IsWeekend
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		lineageTag: 9cf23936-7c1b-4b68-83a1-6312048b8bc8
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [IsWeekend]
+
+		annotation SummarizationSetBy = Automatic
+
+	column IsWorkingDay
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		lineageTag: 521244cd-3368-499d-8bac-51f79aab06fa
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [IsWorkingDay]
+
+		annotation SummarizationSetBy = Automatic
+
+	column DayOffset
+		formatString: 0
+		lineageTag: 9d7e589d-fe55-4664-910e-3b3167375efa
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [DayOffset]
+
+		annotation SummarizationSetBy = Automatic
+
+	column MonthOffset
+		formatString: 0
+		lineageTag: bda72831-cce4-49e9-b8db-2e484b2c35d2
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [MonthOffset]
+
+		annotation SummarizationSetBy = Automatic
+
+	column YearOffset
+		formatString: 0
+		lineageTag: 7fb0dd8e-5c45-48e2-9344-8d33bdc27735
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [YearOffset]
+
+		annotation SummarizationSetBy = Automatic
+
+	column IsCurrentYear
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		lineageTag: 8e26108b-a415-443f-8d7a-4df94990dbdc
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [IsCurrentYear]
+
+		annotation SummarizationSetBy = Automatic
+
+	column IsCurrentMonth
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		lineageTag: 2df75ff4-6add-426d-ad66-83ecac2d64a2
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [IsCurrentMonth]
+
+		annotation SummarizationSetBy = Automatic
+
+	column IsPast
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		lineageTag: e30a8b6d-8bb9-459a-97bc-80ed876d6e96
+		summarizeBy: none
+		isNameInferred
+		sourceColumn: [IsPast]
+
+		annotation SummarizationSetBy = Automatic
+
+	hierarchy 'Date Hierarchy'
+		lineageTag: 1ab36c23-2cdf-4f49-b9b5-ed31fef41988
+
+		level Year
+			lineageTag: dc7bfe48-9f99-4b14-8867-03c848d5da00
+			column: Year
+
+		level Quarter
+			lineageTag: 8804d9ea-f8d2-4904-a014-d473ac1d8552
+			column: Quarter
+
+		level MonthName
+			lineageTag: 03c04556-d572-44f4-8bff-700a4e525bc4
+			column: MonthName
+
+		level WeekYear
+			lineageTag: a3d993a4-5a9c-4937-847b-4f34a617bb12
+			column: WeekYear
+
+		level Date
+			lineageTag: ca48c54c-9a59-42c1-b59c-079f7c3b4280
+			column: Date
+
+	partition DimDate = calculated
+		mode: import
+		source = ```
+				
+				// 1. Delimitare interval (ani compleți obligatorii pentru Time Intelligence)
+				// Poți seta anii static sau dinamic pe baza fact-ului (ex: YEAR(MIN(FactSales[OrderDate])))
+				VAR _StartYear = 2020
+				VAR _EndYear   = 2030
+				
+				VAR _StartDate = DATE(_StartYear, 1, 1)
+				VAR _EndDate   = DATE(_EndYear, 12, 31)
+				
+				// 2. Generare serie contiguă de date
+				VAR _BaseCalendar = CALENDAR(_StartDate, _EndDate)
+				
+				// 3. Data de referință pentru calcule relative
+				VAR _Today = TODAY()
+				
+				RETURN
+				    ADDCOLUMNS(
+				        _BaseCalendar,
+				        
+				        // --- CHEI ȘI TIMP PRINCIPAL ---
+				        "DateKey", 
+				            YEAR([Date]) * 10000 + MONTH([Date]) * 100 + DAY([Date]),
+				        
+				        // --- AN ---
+				        "Year", 
+				            YEAR([Date]),
+				        
+				        // --- TRIMESTRU ---
+				        "QuarterNumber", 
+				            QUARTER([Date]),
+				        "Quarter", 
+				            "Q" & QUARTER([Date]),
+				        "QuarterYear", 
+				            "Q" & QUARTER([Date]) & " " & YEAR([Date]),
+				        "QuarterYearKey", 
+				            YEAR([Date]) * 10 + QUARTER([Date]),
+				        
+				        // --- LUNĂ ---
+				        "MonthNumber", 
+				            MONTH([Date]),
+				        "MonthName", 
+				            FORMAT([Date], "mmm"),
+				        "MonthYear", 
+				            FORMAT([Date], "mmm yyyy"),
+				        "MonthYearKey", 
+				            YEAR([Date]) * 100 + MONTH([Date]),
+				        
+				        // --- ZI ---
+				        "DayOfMonth", 
+				            DAY([Date]),
+				        "DayOfWeekNumber", 
+				            WEEKDAY([Date], 2), -- 1 = Luni, 7 = Duminică
+				        "DayOfWeekName", 
+				            FORMAT([Date], "ddd"),
+				        
+				        // --- SĂPTĂMÂNĂ ---
+				        "WeekNumber", 
+				            WEEKNUM([Date], 2), -- Început de săptămână: Luni
+				        "WeekYear", 
+				            "W" & FORMAT(WEEKNUM([Date], 2), "00") & " " & YEAR([Date]),
+				        "WeekYearKey", 
+				            YEAR([Date]) * 100 + WEEKNUM([Date], 2),
+				        
+				        // --- FLAG-URI STATUT ZI ---
+				        "IsWeekend", 
+				            IF(WEEKDAY([Date], 2) >= 6, TRUE(), FALSE()),
+				        "IsWorkingDay", 
+				            IF(WEEKDAY([Date], 2) < 6, TRUE(), FALSE()),
+				        
+				        // --- OFFSET-URI RELATIVE (Calculate la momentul refresh-ului) ---
+				        "DayOffset", 
+				            INT([Date] - _Today),
+				        "MonthOffset", 
+				            (YEAR([Date]) - YEAR(_Today)) * 12 + MONTH([Date]) - MONTH(_Today),
+				        "YearOffset", 
+				            YEAR([Date]) - YEAR(_Today),
+				        
+				        // --- FLAG-URI PERIOADĂ CURENTĂ / TRECUTĂ ---
+				        "IsCurrentYear", 
+				            IF(YEAR([Date]) = YEAR(_Today), TRUE(), FALSE()),
+				        "IsCurrentMonth", 
+				            IF(YEAR([Date]) = YEAR(_Today) && MONTH([Date]) = MONTH(_Today), TRUE(), FALSE()),
+				        "IsPast", 
+				            IF([Date] < _Today, TRUE(), FALSE())
+				    )
+				```
+
+	annotation PBI_Id = 7ae1faa88c7a4c578daea0299cf39572
+

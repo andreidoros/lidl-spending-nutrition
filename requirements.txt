@@ -1,0 +1,23 @@
+# Lidl Plus Data Pipeline - Production Dependencies
+
+# Embedded analytical columnar database & SQL engine
+duckdb>=1.0.0
+
+# HTTP requests for Open Food Facts Live REST API v2 & OAuth2 PKCE token exchange
+requests>=2.31.0
+
+# Async HTTP transport with cancellable absolute deadlines for Groq enrichment
+httpx>=0.27.0,<1.0.0
+
+# Lidl Plus API client & token interface
+lidlplus-api>=0.0.5
+
+# High-performance Zstandard compression for exported Parquet files
+zstandard>=0.22.0
+
+# Automated browser authentication & redirect interception
+playwright>=1.40.0
+
+# Local product-review control panel
+streamlit>=1.38.0,<2.0.0
+pandas>=2.0.0
