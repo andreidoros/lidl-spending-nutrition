@@ -119,6 +119,7 @@ data/raw_tickets/        raw receipt JSON files
 ## Requirements
 
 - **Python 3.10 or newer**
+- Visual C++ Redistributable 2015
 - Windows for the one-click `run.bat` launcher (the app itself is cross-platform)
 - A **Lidl Plus account** in a supported country (`ro`, `de`, `fr`, `es`, `it`, `pl`, …)
 - Internet access for the first login and for synchronization
@@ -130,7 +131,7 @@ data/raw_tickets/        raw receipt JSON files
 
 1. Clone the repository:
    ```bat
-   git clone https://github.com/<your-account>/lidl-spending-nutrition.git
+   git clone https://github.com/andreidoros/lidl-spending-nutrition.git
    cd lidl-spending-nutrition
    ```
 2. Double-click **`run.bat`**.
@@ -196,7 +197,7 @@ python auth_login.py
 ```
 
 1. The script opens the official Lidl Plus login page in your default browser.
-2. Log in and confirm the SMS code.
+2. Log in and confirm the SMS code if needed.
 3. The browser is redirected to `com.lidlplus.app://callback?code=...`.
 4. Copy that full URL from the address bar and paste it into the terminal.
 5. The refresh token is saved in `.env` as `LIDL_REFRESH_TOKEN`.
