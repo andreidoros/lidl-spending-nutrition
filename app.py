@@ -776,7 +776,8 @@ def main() -> None:
         )
     if _has_unsaved_review():
         st.warning("You have an unsaved review draft. Save or discard it before Sync or AI retry.", icon=":material/edit_note:")
-    sync_disabled = _has_unsaved_review()
+    sync_running = st.session_state.get("sync_running", False)
+    sync_disabled = _has_unsaved_review() or sync_running
     action_left, action_mid, action_right = st.columns(
         [1.2, 2.2, 6.6], vertical_alignment="center"
     )
@@ -790,11 +791,13 @@ def main() -> None:
         )
     with action_mid:
         review_clicked = st.button(
-            "Review products", key="open_review", icon=":material/fact_check:"
+            "Review products", key="open_review", icon=":material/fact_check:",
+            disabled=sync_running,
         )
         export_retry = st.session_state.get("export_retry_needed", False)
         export_clicked = export_retry and st.button(
-            "Retry export", key="retry_export", icon=":material/refresh:"
+            "Retry export", key="retry_export", icon=":material/refresh:",
+            disabled=sync_running,
         )
     # Search lives in the action row but is filled after _render_review(), so
     # review drafts are evaluated first and two editors cannot save over each
@@ -802,6 +805,10 @@ def main() -> None:
     product_search_container = action_right.container()
 
     if sync_clicked:
+        st.session_state.sync_running = True
+        st.rerun()
+
+    if st.session_state.get("sync_running", False):
         _, callback = _progress_display("Synchronizing")
         st.session_state.last_sync_complete = False
         sync_state = {"exports_failed": False}
@@ -838,6 +845,9 @@ def main() -> None:
                 )
             else:
                 st.error(f"Synchronization failed ({type(exc).__name__}). No operation was started automatically on page refresh.")
+        finally:
+            st.session_state.sync_running = False
+            st.rerun()
 
     if st.session_state.get("sync_completion_prompt"):
         count = st.session_state.last_sync_review_count or 0
@@ -872,7 +882,10 @@ def main() -> None:
     # Fill the action-row slot last: the search widget must not be evaluated
     # before the product-review editor.
     with product_search_container:
-        _render_product_search()
+        if sync_running:
+            st.info("Product search is unavailable while Sync is running.")
+        else:
+            _render_product_search()
     st.caption(
         "AI completion sends only product names, codes, and package weight. "
         "Receipts, prices, and purchase history stay on this computer."

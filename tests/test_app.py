@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import pandas as pd
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 from ai_enrichment.chat_batch import (
@@ -55,6 +56,28 @@ def synthetic_review_app():
 
 
 class StreamlitAppTests(unittest.TestCase):
+    def test_review_is_disabled_before_sync_service_starts_and_enabled_after(self):
+        rendered = {}
+        real_button = st.button
+
+        def capture_button(label, *args, **kwargs):
+            result = real_button(label, *args, **kwargs)
+            rendered[kwargs.get("key")] = kwargs.get("disabled", False)
+            return result
+
+        with synthetic_review_app() as (app, products, read, groq, sync):
+            def during_sync(*args, **kwargs):
+                self.assertTrue(rendered["open_review"], "Review is clickable during Sync")
+
+            sync.side_effect = during_sync
+            with patch.object(st, "button", side_effect=capture_button):
+                app.button(key="sync_pipeline").click().run(timeout=30)
+            self.assertFalse(app.exception)
+            self.assertFalse(app.error, [error.value for error in app.error])
+            sync.assert_called_once()
+            app.run()
+            self.assertFalse(app.button(key="open_review").disabled)
+
     def test_single_review_button_after_sync_and_new_title(self):
         with synthetic_review_app() as (app, products, read, groq, sync):
             app.button(key="sync_pipeline").click().run()

@@ -153,6 +153,10 @@ Keep the launcher window open while you use the app; press `Ctrl+C` in that wind
 stop it.
 
 Sync is an explicit button in the app. Page loads and reruns never start the pipeline.
+Each Sync checks every available receipt-history page and downloads only receipts
+that are not already stored locally. This lets a later retry recover older receipts
+if an earlier download was interrupted. Review and export-retry actions are disabled
+while Sync is running.
 
 > The first synchronization can take a while: it downloads the receipts, resolves
 > barcodes and queries Open Food Facts for products that are missing nutrition data.

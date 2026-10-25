@@ -513,10 +513,6 @@ def sync_tickets_incremental(
 
         print(f"Page {page}: {page_new_count} new receipts downloaded out of {len(tickets)} checked.")
 
-        if page_new_count == 0:
-            print("[+] Early-stop triggered: reached already downloaded history.")
-            break
-
         if len(tickets) < res.get("size", 10):
             break
 
