@@ -42,6 +42,62 @@ REQUIRED_FOOD_NUTRIENTS: tuple[str, ...] = (
 
 _NUMERIC_FIELDS = frozenset(FIELD_NAMES) - frozenset(CATEGORY_FIELDS)
 
+# Inputs of the Atwater energy check. A product whose four values are all
+# manually protected has been confirmed by a person and is not re-flagged.
+ATWATER_CORE_FIELDS: tuple[str, ...] = (
+    "kcal_100g",
+    "proteins_100g",
+    "carbs_100g",
+    "fat_100g",
+)
+REVIEW_REASON_INCOMPLETE = "incomplete"
+REVIEW_REASON_ATWATER = "atwater"
+
+
+def _number(value: object) -> float | None:
+    if value is None or _text(value) == "":
+        return None
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(number) else number
+
+
+def atwater_check(product: Mapping[str, object]) -> str | None:
+    """Return a short review message when stored nutrients look implausible.
+
+    Mirrors the rules of the sync's Atwater validation (same order, formula and
+    tolerance) but never changes data. Non-Food products and products missing
+    a core input are not checked; alcoholic beverages skip only the energy
+    balance, as in the sync.
+    """
+    category = _text(product.get("category"))
+    if category == "Non-Food" or _text(product.get("match_status")) == "NON_FOOD":
+        return None
+    kcal, protein, carbs, fat = (_number(product.get(name)) for name in ATWATER_CORE_FIELDS)
+    if kcal is None or protein is None or carbs is None or fat is None:
+        return None
+    fiber = _number(product.get("fiber_100g")) or 0.0
+    salt = _number(product.get("salt_100g")) or 0.0
+    sugars = _number(product.get("sugars_100g")) or 0.0
+    saturated = _number(product.get("saturated_fat_100g")) or 0.0
+
+    if min(kcal, protein, carbs, fat) < 0:
+        return "Negative nutrient value"
+    if protein + carbs + fat + fiber + salt > 105.0:
+        return "Nutrients add up to more than 100 g"
+    if sugars > carbs + 1.0:
+        return "Sugar is higher than carbs"
+    if saturated > fat + 1.0:
+        return "Saturated fat is higher than fat"
+    if category == "Alcoholic Beverages":
+        return None
+    calculated = protein * 4.0 + carbs * 4.0 + fat * 9.0 + fiber * 2.0
+    if abs(kcal - calculated) > max(25.0, kcal * 0.20):
+        return f"Calories {kcal:g} declared vs {round(calculated, 1):g} calculated"
+    return None
+
 
 def missing_required_fields(
     product: Mapping[str, object], category_to_macro: Mapping[str, str]
@@ -720,6 +776,71 @@ def list_incomplete_products(
     return products
 
 
+def list_review_products(
+    con: duckdb.DuckDBPyConnection,
+    category_to_macro: Mapping[str, str],
+) -> list[dict[str, object]]:
+    """Build the review worklist: incomplete products plus implausible nutrition.
+
+    Every Food product with the four Atwater inputs is checked on each call.
+    A product is listed for Atwater only while its core values are not all
+    manually protected; saving them by hand is the person's confirmation.
+    ``list_incomplete_products`` keeps the completeness-only list.
+    """
+    fields = ("product_key", "sample_name") + FIELD_NAMES + (
+        "match_status", "off_product_name", "atwater_debug"
+    )
+    rows = con.execute(
+        f"SELECT {', '.join(fields)} FROM nutrition_cache"
+    ).fetchall()
+    try:
+        protected_counts = dict(con.execute(
+            f"""SELECT product_key, COUNT(DISTINCT field_name) FROM {METADATA_TABLE}
+                WHERE is_protected AND field_name IN ({', '.join('?' for _ in ATWATER_CORE_FIELDS)})
+                GROUP BY 1""",
+            list(ATWATER_CORE_FIELDS),
+        ).fetchall())
+    except duckdb.CatalogException:
+        protected_counts = {}
+    purchases = dict(con.execute(
+        """SELECT TRIM(CAST(COALESCE(NULLIF(TRIM(ean), ''), raw_code) AS VARCHAR)) AS k,
+                  COUNT(*) FROM purchases GROUP BY 1"""
+    ).fetchall())
+
+    products: list[dict[str, object]] = []
+    for raw in rows:
+        product = dict(zip(fields, raw))
+        missing = missing_required_fields(product, category_to_macro)
+        confirmed = protected_counts.get(product["product_key"], 0) == len(ATWATER_CORE_FIELDS)
+        issue = None if confirmed else atwater_check(product)
+        if not missing and issue is None:
+            continue
+        reasons = []
+        if missing:
+            reasons.append(REVIEW_REASON_INCOMPLETE)
+        if issue is not None:
+            reasons.append(REVIEW_REASON_ATWATER)
+        product["times_bought"] = purchases.get(product["product_key"], 0)
+        product["missing_fields"] = missing
+        product["atwater_issue"] = issue
+        product["review_reasons"] = tuple(reasons)
+        products.append(product)
+
+    products.sort(key=lambda row: (-int(row["times_bought"] or 0), _text(row.get("sample_name")).casefold(), _text(row.get("product_key"))))
+    return products
+
+
+def review_status_text(product: Mapping[str, object]) -> str:
+    """Human-readable review status shared by the review CSV and the app."""
+    parts = []
+    if REVIEW_REASON_INCOMPLETE in (product.get("review_reasons") or ()):
+        parts.append("Incomplete")
+    issue = product.get("atwater_issue")
+    if issue:
+        parts.append(f"Check: {issue}")
+    return " · ".join(parts)
+
+
 def regenerate_review_csv(
     con: duckdb.DuckDBPyConnection,
     category_to_macro: Mapping[str, str],
@@ -728,22 +849,26 @@ def regenerate_review_csv(
     *,
     delimiter: str = ",",
 ) -> int:
-    """Overwrite the review CSV from DuckDB's current incomplete-product set.
+    """Overwrite the review CSV from DuckDB's current review worklist.
 
     The CSV is a derived worklist only. Existing queue contents are not used as
     input, so resolved rows disappear and stale rows cannot persist.
     """
     path = Path(output_path)
-    products = list_incomplete_products(con, category_to_macro)
+    products = list_review_products(con, category_to_macro)
+    fieldnames = list(columns)
+    if "review_status" not in fieldnames:
+        fieldnames.insert(fieldnames.index("product_key") + 1 if "product_key" in fieldnames else 0, "review_status")
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(columns), delimiter=delimiter, extrasaction="ignore")
+            writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=delimiter, extrasaction="ignore")
             writer.writeheader()
             for product in products:
                 row = {
                 "product_key": product["product_key"],
+                "review_status": review_status_text(product),
                 "sample_name": product["sample_name"] or "",
                 "macro_category": product["macro_category"] or "",
                 "category": product["category"] or "",

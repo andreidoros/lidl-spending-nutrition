@@ -21,7 +21,7 @@ from ai_enrichment.chat_batch import (
 import pipeline_services
 from pipeline_services import ReviewSaveReport
 from ai_enrichment.service import AIEnrichmentReport
-from app import NUMERIC_COLUMNS, TABLE_COLUMNS, _blank
+from app import NUMERIC_COLUMNS, REVIEW_TABLE_COLUMNS, TABLE_COLUMNS, _blank
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -427,7 +427,8 @@ class StreamlitAppTests(unittest.TestCase):
                 self.assertFalse(app.exception)
                 self.assertEqual(len(app.get("dataframe")), 1)
                 frame = app.get("dataframe")[0].value
-                self.assertEqual(tuple(frame.columns), TABLE_COLUMNS)
+                self.assertEqual(tuple(frame.columns), REVIEW_TABLE_COLUMNS)
+                self.assertEqual(frame.iloc[0]["review_status"], "Incomplete")
                 self.assertEqual(frame.iloc[0]["package_weight_g"], 0.0)
                 self.assertTrue(pd.isna(frame.iloc[0]["fiber_100g"]))
 
@@ -581,6 +582,55 @@ class StreamlitAppTests(unittest.TestCase):
                 app.button(key="retry_export").click().run(timeout=30)
                 refresh_exports.assert_called_once()
                 run_sync.assert_not_called()
+
+
+    def atwater_products(self, products):
+        check = {
+            "product_key": "check-1", "sample_name": "Synthetic quark", "macro_category": "Fresh Food",
+            "category": "Dairy & Eggs", "package_weight_g": 200.0, "kcal_100g": 34.5,
+            "proteins_100g": 12.3, "carbs_100g": 3.7, "sugars_100g": 3.2, "fat_100g": 0.5,
+            "saturated_fat_100g": 0.4, "fiber_100g": None, "salt_100g": 0.14,
+            "review_reasons": ("atwater",), "missing_fields": (),
+            "atwater_issue": "Calories 34.5 declared vs 68.5 calculated",
+        }
+        incomplete = [{**product, "review_reasons": ("incomplete",), "atwater_issue": None} for product in products]
+        return incomplete + [check]
+
+    def test_review_marks_status_and_groq_targets_only_incomplete_products(self):
+        with synthetic_review_app() as (app, products, read, groq, sync):
+            read.return_value = self.atwater_products(products)
+            app.session_state["review_base"] = None
+            app.run()
+            self.assertFalse(app.exception)
+            badge = " ".join(item.value for item in app.markdown)
+            self.assertIn("2 incomplete · 1 to check", badge)
+            frame = app.get("dataframe")[0].value
+            self.assertEqual(frame.loc["check-1", "review_status"], "Check: Calories 34.5 declared vs 68.5 calculated")
+            self.assertEqual(frame.loc["demo-1", "review_status"], "Incomplete")
+            app.button(key="retry_ai").click().run(timeout=30)
+            self.assertFalse(app.exception)
+            self.assertEqual(groq.call_args.args[0], ["demo-1", "demo-2"])
+
+    def test_values_checked_saves_current_nutrition_as_manual_values(self):
+        with synthetic_review_app() as (app, products, read, groq, sync), patch.object(
+            pipeline_services, "save_review_session",
+            return_value=ReviewSaveReport(1, None, (), ()),
+        ) as save:
+            read.return_value = self.atwater_products(products)
+            app.session_state["review_base"] = None
+            app.run()
+            app.session_state["review_confirmed"] = {"check-1": True}
+            app.run()
+            self.assertTrue(app.button(key="retry_ai").disabled, "a confirmation is an unsaved draft")
+            app.button(key="save_review").click().run(timeout=30)
+            self.assertFalse(app.exception)
+            edits = save.call_args.kwargs["manual_edits"]
+            self.assertEqual(edits, {"check-1": {
+                "kcal_100g": 34.5, "proteins_100g": 12.3, "carbs_100g": 3.7, "sugars_100g": 3.2,
+                "fat_100g": 0.5, "saturated_fat_100g": 0.4, "salt_100g": 0.14,
+            }})
+            groq.assert_not_called()
+            sync.assert_not_called()
 
 
 if __name__ == "__main__":

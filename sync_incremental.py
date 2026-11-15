@@ -2466,6 +2466,15 @@ def warn_suspicious_overrides(con: duckdb.DuckDBPyConnection) -> None:
 def validate_atwater(con: duckdb.DuckDBPyConnection) -> None:
     """Validate caloric values from Open Food Facts against standard Atwater factor calculation."""
     print("\n--- STEP 8: Atwater Validation & Caloric QA for New Products ---")
+    from product_store import atwater_check
+
+    # Products verified before this run (seed catalog, standard profiles,
+    # manual values) are checked too, but only annotated: their values are kept
+    # and implausible ones are listed in Product review.
+    already_verified = con.execute("""
+        SELECT product_key FROM nutrition_cache
+        WHERE is_verified = TRUE AND COALESCE(match_status, '') != 'NON_FOOD'
+    """).fetchall()
 
     nutrient_fields = (
         "kcal_100g", "proteins_100g", "carbs_100g", "sugars_100g",
@@ -2549,6 +2558,43 @@ def validate_atwater(con: duckdb.DuckDBPyConnection) -> None:
         FROM evaluation ev
         WHERE nutrition_cache.product_key = ev.product_key;
     """)
+
+    check_fields = (
+        "product_key", "category", "match_status", "atwater_debug", "kcal_100g", "proteins_100g",
+        "carbs_100g", "sugars_100g", "fat_100g", "saturated_fat_100g", "fiber_100g", "salt_100g",
+    )
+    flagged_verified = 0
+    note_updates = []
+    verified_keys = {row[0] for row in already_verified}
+    if verified_keys:
+        for raw in con.execute(f"SELECT {', '.join(check_fields)} FROM nutrition_cache").fetchall():
+            product = dict(zip(check_fields, raw))
+            if product["product_key"] not in verified_keys:
+                continue
+            if any(product[name] is None for name in ("kcal_100g", "proteins_100g", "carbs_100g", "fat_100g")):
+                continue
+            issue = atwater_check(product)
+            current_note = product["atwater_debug"] or ""
+            if issue is not None:
+                flagged_verified += 1
+                note = f"CHECK: {issue} (verified values kept)"
+            elif current_note and not current_note.startswith("CHECK:"):
+                continue
+            elif product["category"] == "Alcoholic Beverages":
+                note = "OK (Alcoholic Beverages - exempt from Atwater)"
+            else:
+                calculated = round(
+                    float(product["proteins_100g"]) * 4.0 + float(product["carbs_100g"]) * 4.0
+                    + float(product["fat_100g"]) * 9.0 + float(product["fiber_100g"] or 0.0) * 2.0,
+                    1,
+                )
+                note = f"OK (Atwater={calculated})"
+            if note != current_note:
+                note_updates.append((note, product["product_key"]))
+    if note_updates:
+        con.executemany("UPDATE nutrition_cache SET atwater_debug = ? WHERE product_key = ?", note_updates)
+    if flagged_verified:
+        print(f"[!] {flagged_verified} verified food products have implausible nutrition. Values kept; check them in Product review.")
 
     quarantined_row = con.execute("""
         SELECT COUNT(*)

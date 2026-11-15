@@ -16,6 +16,8 @@ from product_store import (  # noqa: E402
     REQUIRED_FOOD_NUTRIENTS,
     create_schema,
     list_incomplete_products,
+    atwater_check,
+    list_review_products,
     missing_required_fields,
     regenerate_review_csv,
     save_manual_fields,
@@ -616,6 +618,97 @@ class ProductServicesTests(unittest.TestCase):
             "SELECT category, macro_category, kcal_100g, salt_100g, match_status, is_verified "
             "FROM nutrition_cache WHERE product_key='p1'"
         ).fetchone(), ("Dairy & Eggs", "Fresh Food", 10.0, 0.1, "MANUAL_FOOD", True))
+
+    # --- Atwater review: every food product is checked, verified values are kept ---
+
+    def bad_cheese(self, key="bad", *, salt=0.14, status="SEED_CATALOG", verified=True):
+        # Protein alone is 49.2 kcal, so 34.5 kcal declared is implausible.
+        self.product(key, name="Synthetic protein quark", kcal=34.5, protein=12.3, carbs=3.7,
+                     sugar=3.2, fat=0.5, saturated=0.4, salt=salt, status=status, source="SEED_CATALOG")
+        self.con.execute("UPDATE nutrition_cache SET is_verified=? WHERE product_key=?", [verified, key])
+
+    def test_atwater_check_flags_implausible_values_and_respects_exemptions(self):
+        cheese = {"category": "Dairy & Eggs", "kcal_100g": 34.5, "proteins_100g": 12.3,
+                  "carbs_100g": 3.7, "fat_100g": 0.5}
+        self.assertEqual(atwater_check(cheese), "Calories 34.5 declared vs 68.5 calculated")
+        self.assertIsNone(atwater_check({**cheese, "kcal_100g": 69}))
+        self.assertIsNone(atwater_check({**cheese, "fat_100g": None}))
+        self.assertIsNone(atwater_check({**cheese, "category": "Non-Food"}))
+        beer = {**cheese, "category": "Alcoholic Beverages", "kcal_100g": 43, "proteins_100g": 0.5,
+                "carbs_100g": 3.6, "fat_100g": 0}
+        self.assertIsNone(atwater_check(beer))
+        self.assertEqual(atwater_check({**beer, "sugars_100g": 9}), "Sugar is higher than carbs")
+
+    def test_review_list_marks_incomplete_atwater_and_both(self):
+        self.product("incomplete", salt=None)
+        self.bad_cheese("check")
+        self.bad_cheese("both", salt=None)
+        self.product("ok")
+
+        products = {row["product_key"]: row for row in list_review_products(self.con, CATEGORY_TO_MACRO)}
+
+        self.assertEqual(set(products), {"incomplete", "check", "both"})
+        self.assertEqual(products["incomplete"]["review_reasons"], ("incomplete",))
+        self.assertEqual(products["check"]["review_reasons"], ("atwater",))
+        self.assertEqual(products["both"]["review_reasons"], ("incomplete", "atwater"))
+        self.assertEqual(products["check"]["atwater_issue"], "Calories 34.5 declared vs 68.5 calculated")
+        self.assertEqual(
+            [row["product_key"] for row in list_incomplete_products(self.con, CATEGORY_TO_MACRO)],
+            ["incomplete", "both"],
+        )
+
+    def test_saving_all_core_values_by_hand_confirms_an_atwater_warning(self):
+        self.bad_cheese("check")
+        create_schema(self.con)
+        save_manual_fields(self.con, "check", {"kcal_100g": 34.5}, CATEGORY_TO_MACRO)
+        self.assertEqual(len(list_review_products(self.con, CATEGORY_TO_MACRO)), 1)
+
+        save_manual_fields(self.con, "check", {"proteins_100g": 12.3, "carbs_100g": 3.7, "fat_100g": 0.5},
+                           CATEGORY_TO_MACRO)
+
+        self.assertEqual(list_review_products(self.con, CATEGORY_TO_MACRO), [])
+        self.assertEqual(self.con.execute(
+            "SELECT kcal_100g, proteins_100g FROM nutrition_cache WHERE product_key='check'"
+        ).fetchone(), (34.5, 12.3))
+
+    def test_review_csv_has_status_for_each_reason(self):
+        self.product("incomplete", salt=None)
+        self.bad_cheese("check")
+        queue = self.root / "review_queue.csv"
+
+        count = regenerate_review_csv(self.con, CATEGORY_TO_MACRO, queue, CSV_COLUMNS)
+
+        self.assertEqual(count, 2)
+        with queue.open(encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            self.assertEqual(reader.fieldnames[:2], ["product_key", "review_status"])
+            status = {row["product_key"]: row["review_status"] for row in reader}
+        self.assertEqual(status, {
+            "incomplete": "Incomplete",
+            "check": "Check: Calories 34.5 declared vs 68.5 calculated",
+        })
+
+    def test_sync_atwater_annotates_verified_products_without_changing_values(self):
+        self.bad_cheese("verified")
+        self.bad_cheese("new_off", status="MATCHED_OFF", verified=False)
+        create_schema(self.con)
+
+        sync.validate_atwater(self.con)
+
+        self.assertEqual(self.con.execute(
+            "SELECT kcal_100g, proteins_100g, is_verified, atwater_debug FROM nutrition_cache WHERE product_key='verified'"
+        ).fetchone(), (34.5, 12.3, True,
+                        "CHECK: Calories 34.5 declared vs 68.5 calculated (verified values kept)"))
+        # New Open Food Facts values keep the existing strict quarantine.
+        self.assertEqual(self.con.execute(
+            "SELECT kcal_100g, match_status, is_verified FROM nutrition_cache WHERE product_key='new_off'"
+        ).fetchone(), (None, "QUARANTINE_ATWATER_FAIL", False))
+
+        self.con.execute("UPDATE nutrition_cache SET kcal_100g=69 WHERE product_key='verified'")
+        sync.validate_atwater(self.con)
+        self.assertEqual(self.con.execute(
+            "SELECT atwater_debug FROM nutrition_cache WHERE product_key='verified'"
+        ).fetchone()[0], "OK (Atwater=68.5)")
 
 if __name__ == "__main__":
     unittest.main()

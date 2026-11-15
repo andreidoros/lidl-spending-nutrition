@@ -33,7 +33,7 @@ from product_store import (
     FIELD_NAMES,
     NUTRIENT_FIELDS,
     create_schema,
-    list_incomplete_products,
+    list_review_products,
     regenerate_review_csv,
     save_manual_fields,
 )
@@ -458,7 +458,7 @@ def read_product(
 def read_review_products(
     db_path: str | os.PathLike[str] | None = None,
 ) -> list[dict[str, object]]:
-    """Read the current incomplete-product worklist from DuckDB."""
+    """Read the review worklist (incomplete or implausible products) from DuckDB."""
     sync = _load_sync_module()
     path = _database_path(db_path, sync)
     if not path.is_file():
@@ -468,7 +468,7 @@ def read_review_products(
         connection = duckdb.connect(str(path), read_only=True)
         try:
             _, category_to_macro = sync.load_taxonomy()
-            products = list_incomplete_products(connection, category_to_macro)
+            products = list_review_products(connection, category_to_macro)
             if products:
                 keys = [str(product["product_key"]) for product in products]
                 placeholders = ", ".join("?" for _ in keys)

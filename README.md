@@ -37,8 +37,10 @@ local cache are never uploaded anywhere and are excluded from this repository.
 2. **Unpacks barcodes** (EAN-13 and EAN-8, GS1 checksum) into numeric product keys.
 3. **Matches products** against a localized catalog shipped in `data/catalogs/` and,
    when needed, against the Open Food Facts API.
-4. **Validates nutrition labels** with an Atwater consistency check, so impossible
-   calorie/macro combinations are flagged instead of silently accepted.
+4. **Validates nutrition labels** with an Atwater consistency check on every food
+   product, so impossible calorie/macro combinations are flagged instead of silently
+   accepted. Values from the shipped catalog or your own edits are kept and listed for
+   review; unconfirmed new Open Food Facts values are discarded.
 5. **Computes Nutri-Score** (the 2023 algorithm) for the products that have complete
    nutrition data.
 6. **Stores everything in DuckDB** and exports two compact Parquet files for Power BI:
@@ -75,7 +77,8 @@ flowchart LR
 ```
 
 The Streamlit panel (`app.py`) sits on top of the same services: it starts the
-pipeline, shows progress, and lets you review incomplete products.
+pipeline, shows progress, and lets you review incomplete products and products whose
+nutrition needs checking.
 
 ---
 
@@ -109,7 +112,7 @@ Generated at runtime and **not** in the repository:
 lidl_consumption.duckdb  local database
 receipts.parquet         fact table exported for Power BI
 products.parquet         product dimension exported for Power BI
-review_queue.csv         products waiting for review
+review_queue.csv         products waiting for review, with their status
 catalog_overrides.csv    your manual product corrections
 data/raw_tickets/        raw receipt JSON files
 ```
@@ -364,6 +367,11 @@ wrong folder. Edit the parameter as described above.
 **Some products have no nutrition values.**
 Open **Review products** in the app. Incomplete products are listed with the missing
 fields; you can fill them in manually or let AI suggest values.
+
+**A product's calories do not match its protein, carbs and fat.**
+It appears in **Review products** with a *Check* status. Correct the values from the
+label, or tick **Values checked** if the label really says so, then click
+**Save changes**. Confirmed values are not flagged again.
 
 **The report opens but charts are empty.**
 Refresh the model after changing the parameter, and make sure the slicers are not
