@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import duckdb
@@ -12,14 +13,17 @@ import duckdb
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from product_store import (  # noqa: E402
+    AI_STATE_TABLE,
     FIELD_NAMES,
     REQUIRED_FOOD_NUTRIENTS,
+    clear_implausible_nutrition,
     create_schema,
     list_incomplete_products,
     atwater_check,
     list_review_products,
     missing_required_fields,
     regenerate_review_csv,
+    review_status_text,
     save_manual_fields,
     synchronize_field_metadata,
 )
@@ -27,6 +31,7 @@ import sync_incremental as sync  # noqa: E402
 
 TAXONOMY = {
     "Fresh Food": ["Dairy & Eggs"],
+    "Pantry & Groceries": ["Sauces, Oils & Condiments", "Herbs & Spices"],
     "Non-Food": ["Non-Food"],
 }
 CATEGORY_TO_MACRO = {category: macro for macro, categories in TAXONOMY.items() for category in categories}
@@ -619,13 +624,18 @@ class ProductServicesTests(unittest.TestCase):
             "FROM nutrition_cache WHERE product_key='p1'"
         ).fetchone(), ("Dairy & Eggs", "Fresh Food", 10.0, 0.1, "MANUAL_FOOD", True))
 
-    # --- Atwater review: every food product is checked, verified values are kept ---
+    # --- Atwater: implausible nutrition is emptied and the product is incomplete ---
 
     def bad_cheese(self, key="bad", *, salt=0.14, status="SEED_CATALOG", verified=True):
         # Protein alone is 49.2 kcal, so 34.5 kcal declared is implausible.
         self.product(key, name="Synthetic protein quark", kcal=34.5, protein=12.3, carbs=3.7,
                      sugar=3.2, fat=0.5, saturated=0.4, salt=salt, status=status, source="SEED_CATALOG")
         self.con.execute("UPDATE nutrition_cache SET is_verified=? WHERE product_key=?", [verified, key])
+
+    def nutrients(self, key):
+        return self.con.execute(
+            f"SELECT {', '.join(NUTRIENTS)} FROM nutrition_cache WHERE product_key=?", [key]
+        ).fetchone()
 
     def test_atwater_check_flags_implausible_values_and_respects_exemptions(self):
         cheese = {"category": "Dairy & Eggs", "kcal_100g": 34.5, "proteins_100g": 12.3,
@@ -639,41 +649,86 @@ class ProductServicesTests(unittest.TestCase):
         self.assertIsNone(atwater_check(beer))
         self.assertEqual(atwater_check({**beer, "sugars_100g": 9}), "Sugar is higher than carbs")
 
-    def test_review_list_marks_incomplete_atwater_and_both(self):
-        self.product("incomplete", salt=None)
-        self.bad_cheese("check")
-        self.bad_cheese("both", salt=None)
+    def test_herbs_and_spices_skip_energy_and_mass_checks_only(self):
+        # Fails the energy balance in both fibre readings (335 or 315 vs 100 kcal).
+        spice = {"category": "Herbs & Spices", "kcal_100g": 100, "proteins_100g": 10,
+                 "carbs_100g": 60, "fat_100g": 5, "fiber_100g": 5, "salt_100g": 0.05}
+        self.assertIsNotNone(atwater_check({**spice, "category": "Sauces, Oils & Condiments"}))
+        self.assertIsNone(atwater_check(spice))
+        heavy = {**spice, "proteins_100g": 20, "carbs_100g": 75, "fat_100g": 15, "kcal_100g": 515}
+        self.assertEqual(atwater_check({**heavy, "category": "Sauces, Oils & Condiments"}),
+                         "Nutrients add up to more than 100 g")
+        self.assertIsNone(atwater_check(heavy))
+        self.assertEqual(atwater_check({**spice, "sugars_100g": 70}), "Sugar is higher than carbs")
+
+    def test_fibre_already_included_in_carbs_is_tolerated(self):
+        # 300 kcal: EU reading gives 405, carbs-with-fibre reading gives 245 (within 20 %).
+        product = {"category": "Sauces, Oils & Condiments", "kcal_100g": 300, "proteins_100g": 10,
+                   "carbs_100g": 60, "fat_100g": 5, "fiber_100g": 40}
+        self.assertIsNone(atwater_check(product))
+        self.assertIsNone(atwater_check({**product, "carbs_100g": 70, "fat_100g": 20, "kcal_100g": 500}))
+        self.assertIsNotNone(atwater_check({**product, "kcal_100g": 150}))
+
+    def test_clearing_empties_all_unprotected_nutrients_and_lists_the_product(self):
+        self.bad_cheese("bad")
         self.product("ok")
+        create_schema(self.con)
+        save_manual_fields(self.con, "bad", {"salt_100g": 0.2}, CATEGORY_TO_MACRO)
 
+        cleared = clear_implausible_nutrition(self.con)
+
+        self.assertEqual(cleared, [("bad", "Calories 34.5 declared vs 68.5 calculated")])
+        self.assertEqual(self.nutrients("bad"), (None,) * 7 + (0.2,))
+        self.assertEqual(self.con.execute(
+            "SELECT match_status, is_verified, atwater_debug FROM nutrition_cache WHERE product_key='bad'"
+        ).fetchone(), ("QUARANTINE_ATWATER_FAIL", False, "CLEARED: Calories 34.5 declared vs 68.5 calculated"))
+        self.assertEqual(self.con.execute(
+            "SELECT field_name FROM product_field_metadata WHERE product_key='bad' AND field_name LIKE '%_100g'"
+        ).fetchall(), [("salt_100g",)])
         products = {row["product_key"]: row for row in list_review_products(self.con, CATEGORY_TO_MACRO)}
+        self.assertEqual(set(products), {"bad"})
+        self.assertEqual(products["bad"]["cleared_reason"], "Calories 34.5 declared vs 68.5 calculated")
+        self.assertEqual(review_status_text(products["bad"]),
+                         "Incomplete · values cleared: Calories 34.5 declared vs 68.5 calculated")
 
-        self.assertEqual(set(products), {"incomplete", "check", "both"})
-        self.assertEqual(products["incomplete"]["review_reasons"], ("incomplete",))
-        self.assertEqual(products["check"]["review_reasons"], ("atwater",))
-        self.assertEqual(products["both"]["review_reasons"], ("incomplete", "atwater"))
-        self.assertEqual(products["check"]["atwater_issue"], "Calories 34.5 declared vs 68.5 calculated")
-        self.assertEqual(
-            [row["product_key"] for row in list_incomplete_products(self.con, CATEGORY_TO_MACRO)],
-            ["incomplete", "both"],
-        )
-
-    def test_saving_all_core_values_by_hand_confirms_an_atwater_warning(self):
+    def test_values_saved_by_hand_are_confirmed_and_never_cleared(self):
         self.bad_cheese("check")
         create_schema(self.con)
-        save_manual_fields(self.con, "check", {"kcal_100g": 34.5}, CATEGORY_TO_MACRO)
-        self.assertEqual(len(list_review_products(self.con, CATEGORY_TO_MACRO)), 1)
+        save_manual_fields(self.con, "check", {"kcal_100g": 34.5, "proteins_100g": 12.3,
+                                               "carbs_100g": 3.7, "fat_100g": 0.5}, CATEGORY_TO_MACRO)
 
-        save_manual_fields(self.con, "check", {"proteins_100g": 12.3, "carbs_100g": 3.7, "fat_100g": 0.5},
-                           CATEGORY_TO_MACRO)
+        self.assertEqual(clear_implausible_nutrition(self.con), [])
+        sync.validate_atwater(self.con)
 
-        self.assertEqual(list_review_products(self.con, CATEGORY_TO_MACRO), [])
+        self.assertEqual(self.nutrients("check")[:3], (34.5, 12.3, 3.7))
         self.assertEqual(self.con.execute(
-            "SELECT kcal_100g, proteins_100g FROM nutrition_cache WHERE product_key='check'"
-        ).fetchone(), (34.5, 12.3))
+            "SELECT is_verified, atwater_debug FROM nutrition_cache WHERE product_key='check'"
+        ).fetchone(), (True, "OK (confirmed manually: Calories 34.5 declared vs 68.5 calculated)"))
+        self.assertEqual(list_review_products(self.con, CATEGORY_TO_MACRO), [])
 
-    def test_review_csv_has_status_for_each_reason(self):
+    def test_clearing_resets_or_rejects_a_previous_ai_answer(self):
+        self.bad_cheese("before_ai")
+        self.bad_cheese("after_ai")
+        create_schema(self.con)
+        self.con.execute(f"INSERT INTO {AI_STATE_TABLE} (product_key, task, status) VALUES "
+                         "('before_ai', 'nutrition', 'succeeded'), ('after_ai', 'nutrition', 'succeeded')")
+
+        sync.triage_implausible_nutrition(self.con)
+        self.assertEqual(self.con.execute(
+            f"SELECT product_key FROM {AI_STATE_TABLE} ORDER BY 1").fetchall(), [])
+
+        self.bad_cheese("again")
+        self.con.execute(f"INSERT INTO {AI_STATE_TABLE} (product_key, task, status) VALUES ('again', 'nutrition', 'succeeded')")
+        sync.validate_atwater(self.con)
+        self.assertEqual(self.con.execute(
+            f"SELECT status, error_code FROM {AI_STATE_TABLE} WHERE product_key='again'"
+        ).fetchone(), ("invalid", "atwater_failed"))
+        self.assertEqual(self.nutrients("again"), (None,) * 8)
+
+    def test_review_csv_has_status_with_the_clearing_reason(self):
         self.product("incomplete", salt=None)
         self.bad_cheese("check")
+        clear_implausible_nutrition(self.con)
         queue = self.root / "review_queue.csv"
 
         count = regenerate_review_csv(self.con, CATEGORY_TO_MACRO, queue, CSV_COLUMNS)
@@ -685,30 +740,83 @@ class ProductServicesTests(unittest.TestCase):
             status = {row["product_key"]: row["review_status"] for row in reader}
         self.assertEqual(status, {
             "incomplete": "Incomplete",
-            "check": "Check: Calories 34.5 declared vs 68.5 calculated",
+            "check": "Incomplete · values cleared: Calories 34.5 declared vs 68.5 calculated",
         })
 
-    def test_sync_atwater_annotates_verified_products_without_changing_values(self):
-        self.bad_cheese("verified")
-        self.bad_cheese("new_off", status="MATCHED_OFF", verified=False)
+    def test_validation_verifies_good_values_and_notes_exemptions(self):
+        self.product("good", kcal=69, protein=12.3, carbs=3.7, fat=0.5, status="MATCHED_OFF")
+        self.product("pepper", macro="Pantry & Groceries", category="Herbs & Spices", kcal=251,
+                     protein=10.4, carbs=64.8, fat=3.3, fiber=25.3, status="MATCHED_OFF")
         create_schema(self.con)
 
         sync.validate_atwater(self.con)
 
         self.assertEqual(self.con.execute(
-            "SELECT kcal_100g, proteins_100g, is_verified, atwater_debug FROM nutrition_cache WHERE product_key='verified'"
-        ).fetchone(), (34.5, 12.3, True,
-                        "CHECK: Calories 34.5 declared vs 68.5 calculated (verified values kept)"))
-        # New Open Food Facts values keep the existing strict quarantine.
-        self.assertEqual(self.con.execute(
-            "SELECT kcal_100g, match_status, is_verified FROM nutrition_cache WHERE product_key='new_off'"
-        ).fetchone(), (None, "QUARANTINE_ATWATER_FAIL", False))
+            "SELECT product_key, is_verified, match_status, atwater_debug FROM nutrition_cache ORDER BY 1"
+        ).fetchall(), [
+            ("good", True, "MATCHED_OFF_VERIFIED", "OK (Atwater=68.5)"),
+            ("pepper", True, "MATCHED_OFF_VERIFIED", "OK (Herbs & Spices - exempt from Atwater)"),
+        ])
 
-        self.con.execute("UPDATE nutrition_cache SET kcal_100g=69 WHERE product_key='verified'")
-        sync.validate_atwater(self.con)
+    # --- Herbs & spices rules ---
+
+    def test_spice_rules_match_spices_and_keep_sauces(self):
+        rules = sync.load_spice_rules(Path(__file__).resolve().parent.parent / "data" / "catalogs" / "ro" / "spice_rules.json")
+        for name in ("Piper negru macinat", "Boia dulce afumată", "Rasnita condim sort.", "Foi de dafin",
+                     "Mix de condimente", "Scortisoara macinata", "Usturoi granulat"):
+            self.assertTrue(sync.is_herb_or_spice(rules, name), name)
+        for name in ("Sos de roșii cu busuioc", "Pasta de ardei", "Cub concentrat pentru supa",
+                     "Ulei masline spray", "Ketchup iute", "Dr. Oetker Esenta vanilie", "Ardeipiper"):
+            self.assertFalse(sync.is_herb_or_spice(rules, name), name)
+        self.assertTrue(sync.spice_rule_applies(rules, "Sauces, Oils & Condiments"))
+        self.assertTrue(sync.spice_rule_applies(rules, None))
+        self.assertFalse(sync.spice_rule_applies(rules, "Biscuits & Savory Snacks"))
+
+    def test_classify_moves_spices_but_not_manual_or_other_categories(self):
+        rules_path = self.root / "spice_rules.json"
+        rules_path.write_text('{"from_categories": ["Sauces, Oils & Condiments"], "include": ["piper", "boia"], '
+                              '"exclude": ["sos"]}', encoding="utf-8")
+        taxonomy_path = self.root / "taxonomy.json"
+        taxonomy_path.write_text('{"Pantry & Groceries": ["Sauces, Oils & Condiments", "Herbs & Spices"], '
+                                 '"Sweets & Snacks": ["Biscuits & Savory Snacks"]}', encoding="utf-8")
+        self.product("pepper", name="Piper negru", macro="Pantry & Groceries", category="Sauces, Oils & Condiments")
+        self.product("sauce", name="Sos cu piper", macro="Pantry & Groceries", category="Sauces, Oils & Condiments")
+        self.product("chips", name="Chipsuri boia", macro="Sweets & Snacks", category="Biscuits & Savory Snacks")
+        self.product("manual", name="Boia dulce", macro="Pantry & Groceries", category="Sauces, Oils & Condiments")
+        self.product("blank", name="Boia iute", macro=None, category=None)
+        create_schema(self.con)
+        save_manual_fields(self.con, "manual", {"category": "Sauces, Oils & Condiments"},
+                           {"Sauces, Oils & Condiments": "Pantry & Groceries"})
+
+        with unittest.mock.patch.object(sync, "SPICE_RULES_PATH", rules_path), \
+                unittest.mock.patch.object(sync, "TAXONOMY_PATH", taxonomy_path):
+            moved = sync.classify_herbs_and_spices(self.con)
+
+        self.assertEqual(moved, 2)
+        self.assertEqual(dict(self.con.execute(
+            "SELECT product_key, category FROM nutrition_cache").fetchall()), {
+            "pepper": "Herbs & Spices", "sauce": "Sauces, Oils & Condiments",
+            "chips": "Biscuits & Savory Snacks", "manual": "Sauces, Oils & Condiments",
+            "blank": "Herbs & Spices",
+        })
         self.assertEqual(self.con.execute(
-            "SELECT atwater_debug FROM nutrition_cache WHERE product_key='verified'"
-        ).fetchone()[0], "OK (Atwater=68.5)")
+            "SELECT macro_category FROM nutrition_cache WHERE product_key='blank'").fetchone()[0], "Pantry & Groceries")
+
+    def test_seed_corrections_pass_the_atwater_check(self):
+        seed = Path(__file__).resolve().parent.parent / "data" / "catalogs" / "ro" / "catalog_seed.csv"
+        with seed.open(encoding="utf-8-sig", newline="") as handle:
+            rows = {row["product_key"]: row for row in csv.DictReader(handle)}
+        for key in ("4056489129660", "5942321000213", "4056489539797", "5941872102438",
+                    "8000500023976", "5949026104857"):
+            self.assertIsNone(atwater_check(rows[key]), rows[key]["sample_name"])
+        spices = [row for row in rows.values() if row["category"] == "Herbs & Spices"]
+        self.assertGreaterEqual(len(spices), 20)
+        self.assertTrue(all(row["macro_category"] == "Pantry & Groceries" for row in spices))
+
+
+NUTRIENTS = ("kcal_100g", "proteins_100g", "carbs_100g", "sugars_100g", "fat_100g",
+             "saturated_fat_100g", "fiber_100g", "salt_100g")
+
 
 if __name__ == "__main__":
     unittest.main()

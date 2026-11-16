@@ -45,6 +45,8 @@ COUNTRY_CATALOG_DIR = CATALOGS_BASE_DIR / LIDL_COUNTRY
 UNIVERSAL_TAXONOMY_PATH = CATALOGS_BASE_DIR / "taxonomy.json"
 TAXONOMY_PATH = UNIVERSAL_TAXONOMY_PATH if UNIVERSAL_TAXONOMY_PATH.exists() else (COUNTRY_CATALOG_DIR / "taxonomy.json")
 SEED_CATALOG_PATH = COUNTRY_CATALOG_DIR / "catalog_seed.csv"
+SPICE_RULES_PATH = COUNTRY_CATALOG_DIR / "spice_rules.json"
+HERBS_AND_SPICES = "Herbs & Spices"
 
 
 @dataclass(frozen=True)
@@ -58,11 +60,12 @@ class ReceiptSyncResult:
 
 def configure_country(country_code: str) -> None:
     """Dynamically configure active country and catalog paths."""
-    global LIDL_COUNTRY, COUNTRY_CATALOG_DIR, TAXONOMY_PATH, SEED_CATALOG_PATH
+    global LIDL_COUNTRY, COUNTRY_CATALOG_DIR, TAXONOMY_PATH, SEED_CATALOG_PATH, SPICE_RULES_PATH
     LIDL_COUNTRY = country_code.lower().strip()
     COUNTRY_CATALOG_DIR = CATALOGS_BASE_DIR / LIDL_COUNTRY
     TAXONOMY_PATH = UNIVERSAL_TAXONOMY_PATH if UNIVERSAL_TAXONOMY_PATH.exists() else (COUNTRY_CATALOG_DIR / "taxonomy.json")
     SEED_CATALOG_PATH = COUNTRY_CATALOG_DIR / "catalog_seed.csv"
+    SPICE_RULES_PATH = COUNTRY_CATALOG_DIR / "spice_rules.json"
 
 # =====================================================================
 # MODULAR INTERNATIONALIZATION (i18n) ENGINE
@@ -1335,7 +1338,9 @@ def update_nutrition_cache_from_off(
                         -- 6. Pantry & Groceries (Evaluated before Fresh to prioritize canned & preserved items)
                         WHEN list_has_any(off.categories_tags, ['en:canned-foods', 'en:canned-vegetables', 'en:canned-fishes', 'en:pickles', 'en:canned-fruits', 'en:canned-meals', 'en:preserves', 'en:tinned-foods', 'en:tinned-fishes'])
                             THEN 'Canned Goods & Pickles'
-                        WHEN list_has_any(off.categories_tags, ['en:sauces', 'en:condiments', 'en:vegetable-oils', 'en:olive-oils', 'en:vinegars', 'en:ketchups', 'en:mayonnaises', 'en:mustards', 'en:spices', 'en:dressings'])
+                        WHEN list_has_any(off.categories_tags, ['en:spices', 'en:dried-herbs', 'en:spice-mixes', 'en:ground-spices'])
+                            THEN 'Herbs & Spices'
+                        WHEN list_has_any(off.categories_tags, ['en:sauces', 'en:condiments', 'en:vegetable-oils', 'en:olive-oils', 'en:vinegars', 'en:ketchups', 'en:mayonnaises', 'en:mustards', 'en:dressings'])
                             THEN 'Sauces, Oils & Condiments'
                         WHEN list_has_any(off.categories_tags, ['en:cereals-and-potatoes', 'en:pastas', 'en:flours', 'en:rices', 'en:noodles', 'en:baking-ingredients', 'en:grains', 'en:semolinas'])
                             THEN 'Baking & Cooking Ingredients'
@@ -1382,7 +1387,7 @@ def update_nutrition_cache_from_off(
                 off.brands AS off_brands,
                 CASE
                     WHEN off.wf_category IN ('Fresh Meat & Fish', 'Fresh Fruits & Vegetables', 'Dairy & Eggs', 'Processed Meat & Deli', 'Ready Meals & Chilled Convenience') THEN 'Fresh Food'
-                    WHEN off.wf_category IN ('Canned Goods & Pickles', 'Baking & Cooking Ingredients', 'Sauces, Oils & Condiments') THEN 'Pantry & Groceries'
+                    WHEN off.wf_category IN ('Canned Goods & Pickles', 'Baking & Cooking Ingredients', 'Sauces, Oils & Condiments', 'Herbs & Spices') THEN 'Pantry & Groceries'
                     WHEN off.wf_category IN ('Water & Soft Drinks', 'Alcoholic Beverages', 'Coffee & Tea') THEN 'Beverages'
                     WHEN off.wf_category IN ('Ice Cream & Frozen Desserts', 'Frozen Fruits & Vegetables', 'Frozen Fish & Seafood', 'Frozen Ready Meals & Pizza') THEN 'Frozen'
                     WHEN off.wf_category IN ('Biscuits & Savory Snacks', 'Chocolate & Confectionery', 'Desserts & Pastries') THEN 'Sweets & Snacks'
@@ -1495,7 +1500,7 @@ def update_nutrition_cache_from_off(
                     s.off_brands,
                     CASE
                         WHEN off.wf_category IN ('Fresh Meat & Fish', 'Fresh Fruits & Vegetables', 'Dairy & Eggs', 'Processed Meat & Deli', 'Ready Meals & Chilled Convenience') THEN 'Fresh Food'
-                        WHEN off.wf_category IN ('Canned Goods & Pickles', 'Baking & Cooking Ingredients', 'Sauces, Oils & Condiments') THEN 'Pantry & Groceries'
+                        WHEN off.wf_category IN ('Canned Goods & Pickles', 'Baking & Cooking Ingredients', 'Sauces, Oils & Condiments', 'Herbs & Spices') THEN 'Pantry & Groceries'
                         WHEN off.wf_category IN ('Water & Soft Drinks', 'Alcoholic Beverages', 'Coffee & Tea') THEN 'Beverages'
                         WHEN off.wf_category IN ('Ice Cream & Frozen Desserts', 'Frozen Fruits & Vegetables', 'Frozen Fish & Seafood', 'Frozen Ready Meals & Pizza') THEN 'Frozen'
                         WHEN off.wf_category IN ('Biscuits & Savory Snacks', 'Chocolate & Confectionery', 'Desserts & Pastries') THEN 'Sweets & Snacks'
@@ -1553,7 +1558,9 @@ def update_nutrition_cache_from_off(
                             -- 6. Pantry & Groceries (Evaluated before Fresh to prioritize canned & preserved items)
                             WHEN list_has_any(s.categories_tags, ['en:canned-foods', 'en:canned-vegetables', 'en:canned-fishes', 'en:pickles', 'en:canned-fruits', 'en:canned-meals', 'en:preserves', 'en:tinned-foods', 'en:tinned-fishes'])
                                 THEN 'Canned Goods & Pickles'
-                            WHEN list_has_any(s.categories_tags, ['en:sauces', 'en:condiments', 'en:vegetable-oils', 'en:olive-oils', 'en:vinegars', 'en:ketchups', 'en:mayonnaises', 'en:mustards', 'en:spices', 'en:dressings'])
+                            WHEN list_has_any(s.categories_tags, ['en:spices', 'en:dried-herbs', 'en:spice-mixes', 'en:ground-spices'])
+                                THEN 'Herbs & Spices'
+                            WHEN list_has_any(s.categories_tags, ['en:sauces', 'en:condiments', 'en:vegetable-oils', 'en:olive-oils', 'en:vinegars', 'en:ketchups', 'en:mayonnaises', 'en:mustards', 'en:dressings'])
                                 THEN 'Sauces, Oils & Condiments'
                             WHEN list_has_any(s.categories_tags, ['en:cereals-and-potatoes', 'en:pastas', 'en:flours', 'en:rices', 'en:noodles', 'en:baking-ingredients', 'en:grains', 'en:semolinas'])
                                 THEN 'Baking & Cooking Ingredients'
@@ -1836,6 +1843,91 @@ def run_deterministic_non_food_filter(con: duckdb.DuckDBPyConnection) -> None:
               SELECT product_key FROM nutrition_cache WHERE category = 'Non-Food'
           )
     """)
+
+
+def load_spice_rules(path: Path | None = None) -> dict[str, object]:
+    """Load the country's herbs & spices keyword rules (empty when absent)."""
+    location = Path(path) if path is not None else SPICE_RULES_PATH
+    if not location.exists():
+        return {}
+    data = json.loads(location.read_text(encoding="utf-8-sig"))
+    return {
+        "from_categories": [str(value) for value in data.get("from_categories", [])],
+        "include_uncategorized": bool(data.get("include_uncategorized", True)),
+        "include": [fold_accents(str(value)).lower() for value in data.get("include", [])],
+        "exclude": [fold_accents(str(value)).lower() for value in data.get("exclude", [])],
+    }
+
+
+def _keyword_hit(text: str, keywords: list[str]) -> bool:
+    # A keyword must start a word: "piper" matches "Piper negru", not "ardeipiper".
+    return any(re.search(r"(?<![a-z0-9])" + re.escape(keyword), text) for keyword in keywords)
+
+
+def is_herb_or_spice(rules: dict[str, object], *names: object) -> bool:
+    """True when a product name hits an include keyword and no exclude keyword."""
+    if not rules:
+        return False
+    texts = [fold_accents(str(name)).lower() for name in names if name]
+    if not texts:
+        return False
+    exclude = rules["exclude"]
+    if any(_keyword_hit(text, exclude) for text in texts):
+        return False
+    return any(_keyword_hit(text, rules["include"]) for text in texts)
+
+
+def spice_rule_applies(rules: dict[str, object], category: object) -> bool:
+    """Rules only move products out of the configured source categories."""
+    if not rules:
+        return False
+    if category is None or not str(category).strip():
+        return bool(rules["include_uncategorized"])
+    return str(category) in rules["from_categories"]
+
+
+def classify_herbs_and_spices(con: duckdb.DuckDBPyConnection) -> int:
+    """Move dried herbs, spices and spice blends into 'Herbs & Spices'.
+
+    Their label energy rarely balances with the Atwater factors, so they get
+    their own category, which the Atwater check exempts. A manually protected
+    category is never changed.
+    """
+    rules = load_spice_rules()
+    if not rules:
+        return 0
+    _, category_to_macro = load_taxonomy()
+    macro = category_to_macro.get(HERBS_AND_SPICES)
+    if macro is None:
+        print(f"[!] '{HERBS_AND_SPICES}' is not in the taxonomy; spice rules skipped.")
+        return 0
+    rows = con.execute("""
+        SELECT nc.product_key, nc.sample_name, nc.off_product_name, nc.category
+        FROM nutrition_cache nc
+        WHERE COALESCE(nc.category, '') != ?
+          AND COALESCE(nc.match_status, '') != 'NON_FOOD'
+          AND NOT EXISTS (
+              SELECT 1 FROM product_field_metadata metadata
+              WHERE metadata.product_key = nc.product_key
+                AND metadata.field_name = 'category'
+                AND metadata.is_protected
+          )
+    """, [HERBS_AND_SPICES]).fetchall()
+    keys = [
+        key for key, name, off_name, category in rows
+        if spice_rule_applies(rules, category) and is_herb_or_spice(rules, name, off_name)
+    ]
+    if keys:
+        con.executemany(
+            "UPDATE nutrition_cache SET category = ?, macro_category = ? WHERE product_key = ?",
+            [(HERBS_AND_SPICES, macro, key) for key in keys],
+        )
+        con.executemany(
+            "DELETE FROM product_field_metadata WHERE product_key = ? AND field_name IN ('category', 'macro_category') AND NOT is_protected",
+            [(key,) for key in keys],
+        )
+    print(f"[i] Herbs & spices rules: {len(keys)} products moved to '{HERBS_AND_SPICES}'.")
+    return len(keys)
 
 
 def sanitize_csv_cell(val) -> str:
@@ -2463,138 +2555,71 @@ def warn_suspicious_overrides(con: duckdb.DuckDBPyConnection) -> None:
 # =====================================================================
 # 7. ATWATER VALIDATION & QUARANTINE (NUTRITION QA)
 # =====================================================================
-def validate_atwater(con: duckdb.DuckDBPyConnection) -> None:
-    """Validate caloric values from Open Food Facts against standard Atwater factor calculation."""
-    print("\n--- STEP 8: Atwater Validation & Caloric QA for New Products ---")
-    from product_store import atwater_check
+def triage_implausible_nutrition(con: duckdb.DuckDBPyConnection) -> int:
+    """Before AI runs: empty implausible, unconfirmed nutrition so AI can refill it."""
+    from product_store import clear_implausible_nutrition
 
-    # Products verified before this run (seed catalog, standard profiles,
-    # manual values) are checked too, but only annotated: their values are kept
-    # and implausible ones are listed in Product review.
-    already_verified = con.execute("""
-        SELECT product_key FROM nutrition_cache
-        WHERE is_verified = TRUE AND COALESCE(match_status, '') != 'NON_FOOD'
-    """).fetchall()
+    cleared = clear_implausible_nutrition(con, ai_state="retry")
+    print(f"[i] Atwater triage: {len(cleared)} products with implausible nutrition emptied for completion.")
+    return len(cleared)
+
+
+def validate_atwater(con: duckdb.DuckDBPyConnection) -> None:
+    """Check every food product's nutrition against the Atwater energy balance.
+
+    Implausible values that a person has not confirmed are emptied, so the
+    product is incomplete and goes back to Groq or the chatbot batch; values
+    that pass are marked verified. The rules live in ``product_store.atwater_check``.
+    """
+    print("\n--- STEP 8: Atwater Validation & Caloric QA ---")
+    from product_store import CLEARED_NOTE_PREFIX, atwater_check, atwater_energy, clear_implausible_nutrition
+
+    cleared = clear_implausible_nutrition(con, ai_state="reject")
+    if cleared:
+        print(f"[!] {len(cleared)} products had implausible nutrition; values emptied and listed as incomplete.")
 
     nutrient_fields = (
         "kcal_100g", "proteins_100g", "carbs_100g", "sugars_100g",
         "fat_100g", "saturated_fat_100g", "fiber_100g", "salt_100g",
     )
-    protected_nutrient_updates = ",\n".join(
-        f"{field_name} = CASE WHEN ev.validation_verdict = 'VALID' "
-        "OR EXISTS (SELECT 1 FROM product_field_metadata metadata "
-        "WHERE metadata.product_key = nutrition_cache.product_key "
-        f"AND metadata.field_name = '{field_name}' AND metadata.is_protected) "
-        f"THEN nutrition_cache.{field_name} ELSE NULL END"
-        for field_name in nutrient_fields
-    )
-    con.execute(f"""
-        WITH evaluation AS (
-            SELECT
-                product_key,
-                category,
-                kcal_100g,
-                proteins_100g,
-                carbs_100g,
-                sugars_100g,
-                fat_100g,
-                saturated_fat_100g,
-                COALESCE(fiber_100g, 0.0) AS fib,
-                COALESCE(salt_100g, 0.0) AS salt,
-                ROUND(
-                    (COALESCE(proteins_100g, 0.0) * 4.0) +
-                    (COALESCE(carbs_100g, 0.0) * 4.0) +
-                    (COALESCE(fat_100g, 0.0) * 9.0) +
-                    (COALESCE(fiber_100g, 0.0) * 2.0),
-                    1
-                ) AS kcal_atwater,
-                CASE
-                    WHEN kcal_100g IS NULL OR proteins_100g IS NULL OR carbs_100g IS NULL OR fat_100g IS NULL
-                        THEN 'MISSING_MACROS'
-                    WHEN kcal_100g < 0 OR proteins_100g < 0 OR carbs_100g < 0 OR fat_100g < 0
-                        THEN 'NEGATIVE_VALUES'
-                    WHEN (proteins_100g + carbs_100g + fat_100g + COALESCE(fiber_100g, 0.0) + COALESCE(salt_100g, 0.0)) > 105.0
-                        THEN 'MASS_OVER_105G'
-                    WHEN COALESCE(sugars_100g, 0.0) > (carbs_100g + 1.0)
-                        THEN 'SUGARS_GT_CARBS'
-                    WHEN COALESCE(saturated_fat_100g, 0.0) > (fat_100g + 1.0)
-                        THEN 'SATFAT_GT_FAT'
-                    WHEN category = 'Alcoholic Beverages'
-                        THEN 'VALID'
-                    WHEN ABS(kcal_100g - ((proteins_100g * 4.0) + (carbs_100g * 4.0) + (fat_100g * 9.0) + (COALESCE(fiber_100g, 0.0) * 2.0)))
-                         > GREATEST(25.0, kcal_100g * 0.20)
-                        THEN 'ATWATER_MISMATCH'
-                    ELSE 'VALID'
-                END AS validation_verdict
-            FROM nutrition_cache
-            WHERE is_verified = FALSE
-              AND COALESCE(match_status, '') != 'NON_FOOD'
-              AND kcal_100g IS NOT NULL
-              AND proteins_100g IS NOT NULL
-              AND carbs_100g IS NOT NULL
-              AND fat_100g IS NOT NULL
-        )
-        UPDATE nutrition_cache
-        SET
-            atwater_debug = CASE
-                WHEN ev.validation_verdict = 'VALID' AND ev.category = 'Alcoholic Beverages'
-                    THEN 'OK (Alcoholic Beverages - exempt from Atwater)'
-                WHEN ev.validation_verdict = 'VALID' THEN 'OK (Atwater=' || CAST(ev.kcal_atwater AS VARCHAR) || ')'
-                WHEN ev.validation_verdict = 'MISSING_MACROS' THEN 'Missing macros in OFF'
-                ELSE ev.validation_verdict || ': OFF_kcal=' || COALESCE(CAST(ev.kcal_100g AS VARCHAR), 'NULL')
-                     || ' vs Atwater=' || CAST(ev.kcal_atwater AS VARCHAR)
-            END,
-            {protected_nutrient_updates},
-            match_status       = CASE
-                WHEN nutrition_cache.match_status = 'NOT_FOUND_OFF' THEN 'NOT_FOUND_OFF'
-                WHEN ev.validation_verdict = 'VALID' THEN 'MATCHED_OFF_VERIFIED'
-                WHEN ev.validation_verdict = 'MISSING_MACROS' THEN 'QUARANTINE_MISSING'
-                ELSE 'QUARANTINE_ATWATER_FAIL'
-            END,
-            is_verified        = CASE
-                WHEN ev.validation_verdict = 'VALID' THEN TRUE
-                ELSE FALSE
-            END
-        FROM evaluation ev
-        WHERE nutrition_cache.product_key = ev.product_key;
-    """)
-
-    check_fields = (
-        "product_key", "category", "match_status", "atwater_debug", "kcal_100g", "proteins_100g",
-        "carbs_100g", "sugars_100g", "fat_100g", "saturated_fat_100g", "fiber_100g", "salt_100g",
-    )
-    flagged_verified = 0
+    fields = ("product_key", "category", "match_status", "is_verified", "atwater_debug") + nutrient_fields
+    rows = con.execute(f"""
+        SELECT {', '.join(fields)} FROM nutrition_cache
+        WHERE COALESCE(match_status, '') != 'NON_FOOD' AND COALESCE(category, '') != 'Non-Food'
+    """).fetchall()
+    newly_verified = []
     note_updates = []
-    verified_keys = {row[0] for row in already_verified}
-    if verified_keys:
-        for raw in con.execute(f"SELECT {', '.join(check_fields)} FROM nutrition_cache").fetchall():
-            product = dict(zip(check_fields, raw))
-            if product["product_key"] not in verified_keys:
-                continue
-            if any(product[name] is None for name in ("kcal_100g", "proteins_100g", "carbs_100g", "fat_100g")):
-                continue
-            issue = atwater_check(product)
-            current_note = product["atwater_debug"] or ""
-            if issue is not None:
-                flagged_verified += 1
-                note = f"CHECK: {issue} (verified values kept)"
-            elif current_note and not current_note.startswith("CHECK:"):
-                continue
-            elif product["category"] == "Alcoholic Beverages":
-                note = "OK (Alcoholic Beverages - exempt from Atwater)"
-            else:
-                calculated = round(
-                    float(product["proteins_100g"]) * 4.0 + float(product["carbs_100g"]) * 4.0
-                    + float(product["fat_100g"]) * 9.0 + float(product["fiber_100g"] or 0.0) * 2.0,
-                    1,
-                )
-                note = f"OK (Atwater={calculated})"
-            if note != current_note:
-                note_updates.append((note, product["product_key"]))
+    for raw in rows:
+        product = dict(zip(fields, raw))
+        if any(product[name] is None for name in ("kcal_100g", "proteins_100g", "carbs_100g", "fat_100g")):
+            continue
+        issue = atwater_check(product)
+        if issue is not None:
+            # Only values confirmed by a person survive clearing.
+            note = f"OK (confirmed manually: {issue})"
+        elif product["category"] in ("Alcoholic Beverages", HERBS_AND_SPICES):
+            note = f"OK ({product['category']} - exempt from Atwater)"
+        else:
+            calculated = atwater_energy(
+                float(product["proteins_100g"]), float(product["carbs_100g"]),
+                float(product["fat_100g"]), float(product["fiber_100g"] or 0.0),
+            )
+            note = f"OK (Atwater={round(calculated, 1)})"
+        current = product["atwater_debug"] or ""
+        if not product["is_verified"]:
+            newly_verified.append((note, product["product_key"]))
+        elif note != current and (not current or current.startswith(("OK", "CHECK:", CLEARED_NOTE_PREFIX))):
+            note_updates.append((note, product["product_key"]))
+    if newly_verified:
+        con.executemany("""
+            UPDATE nutrition_cache
+            SET atwater_debug = ?,
+                is_verified = TRUE,
+                match_status = CASE WHEN match_status = 'NOT_FOUND_OFF' THEN match_status ELSE 'MATCHED_OFF_VERIFIED' END
+            WHERE product_key = ?
+        """, newly_verified)
     if note_updates:
         con.executemany("UPDATE nutrition_cache SET atwater_debug = ? WHERE product_key = ?", note_updates)
-    if flagged_verified:
-        print(f"[!] {flagged_verified} verified food products have implausible nutrition. Values kept; check them in Product review.")
 
     quarantined_row = con.execute("""
         SELECT COUNT(*)

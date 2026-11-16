@@ -283,6 +283,7 @@ def run_sync(
                 ),
             )
             _run_stage(progress_callback, "deterministic_filter", lambda: sync.run_deterministic_non_food_filter(connection))
+            _run_stage(progress_callback, "spice_rules", lambda: sync.classify_herbs_and_spices(connection))
             _run_stage(progress_callback, "package_weights", lambda: sync.compute_weights_and_quantities(connection))
 
             def initialize_product_metadata() -> None:
@@ -310,6 +311,8 @@ def run_sync(
             # product. This is essential on the first sync: legacy manual
             # overrides must be protected before model results are persisted.
             _run_stage(progress_callback, "field_metadata_prepare", initialize_product_metadata)
+            # Implausible values are emptied before AI so this run can refill them.
+            _run_stage(progress_callback, "nutrition_triage", lambda: sync.triage_implausible_nutrition(connection))
 
             from ai_enrichment import run_ai_enrichment
 

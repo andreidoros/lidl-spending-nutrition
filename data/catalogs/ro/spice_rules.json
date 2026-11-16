@@ -1,0 +1,21 @@
+{
+  "description": "Deterministic 'Herbs & Spices' rules for Romanian receipt and Open Food Facts names. A keyword must start a word; accents and case are ignored. A product moves only when a name hits an include keyword, no name hits an exclude keyword, and its category is listed in from_categories (or empty). Manually set categories are never changed.",
+  "from_categories": [
+    "Sauces, Oils & Condiments"
+  ],
+  "include_uncategorized": true,
+  "include": [
+    "piper", "boia", "paprika", "chili macinat", "chilli macinat", "fulgi de chili",
+    "cimbru", "cimbrisor", "oregano", "busuioc uscat", "maghiran", "tarhon",
+    "rozmarin uscat", "patrunjel uscat", "marar uscat", "ierburi",
+    "scortisoara", "nucsoara", "cuisoare", "ienibahar", "cardamom", "anason",
+    "curry", "turmeric", "curcuma", "cumin", "chimen", "coriandru", "schinduf", "sofran",
+    "ghimbir macinat", "usturoi granulat", "usturoi praf", "ceapa granulata",
+    "dafin", "condiment", "condim", "rasnita", "seasoning", "gewurz", "przyprawa"
+  ],
+  "exclude": [
+    "sos", "sauce", "salsa", "sugo", "dip", "ketchup", "mustar", "maionez", "dressing", "pesto",
+    "pasta", "ulei", "oil", "otet", "vinegar", "cub", "supa", "bujon", "baza",
+    "esenta", "hrean", "marmelada", "suc", "legume", "ton", "wasabi"
+  ]
+}

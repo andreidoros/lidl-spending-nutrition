@@ -15,6 +15,14 @@ from typing import Mapping
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TAXONOMY_PATH = PROJECT_ROOT / "data" / "catalogs" / "taxonomy.json"
 
+# Short disambiguation shown to the model under the category list.
+CATEGORY_HINTS: Mapping[str, str] = MappingProxyType({
+    "Herbs & Spices": (
+        "dried herbs, spices, spice blends and spice grinders; sauces, pastes, "
+        'stock cubes and salt stay in "Sauces, Oils & Condiments"'
+    ),
+})
+
 
 class TaxonomyError(ValueError):
     """Raised when the taxonomy file is missing, malformed, or inconsistent."""
@@ -60,6 +68,10 @@ class Taxonomy:
             lines.append(f"{macro}:")
             for category in self.categories_by_macro()[macro]:
                 lines.append(f"  - {category}")
+        notes = [f'  - "{category}": {hint}' for category, hint in CATEGORY_HINTS.items() if category in self.category_to_macro]
+        if notes:
+            lines.append("Category notes:")
+            lines.extend(notes)
         return "\n".join(lines)
 
 

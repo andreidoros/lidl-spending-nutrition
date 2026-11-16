@@ -101,7 +101,7 @@ def make_payload(*items: dict[str, object]) -> dict[str, object]:
 class TestTaxonomy(unittest.TestCase):
     def test_live_taxonomy_shape(self):
         self.assertEqual(len(LIVE_TAXONOMY.macros), 7)
-        self.assertEqual(len(LIVE_TAXONOMY.categories), 21)
+        self.assertEqual(len(LIVE_TAXONOMY.categories), 22)
         self.assertIn(NON_FOOD_CATEGORY, LIVE_TAXONOMY.categories)
         self.assertEqual(LIVE_TAXONOMY.macro_for(NON_FOOD_CATEGORY), "Non-Food")
         self.assertEqual(

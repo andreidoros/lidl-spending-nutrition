@@ -136,6 +136,8 @@ class PipelineServicesTests(unittest.TestCase):
             stack.enter_context(patch.object(sync, "update_nutrition_cache_from_off", side_effect=fake_off))
             stack.enter_context(patch.object(ai_enrichment, "run_ai_enrichment", side_effect=fake_ai))
             stack.enter_context(patch.object(sync, "run_deterministic_non_food_filter", side_effect=mark("non_food")))
+            stack.enter_context(patch.object(sync, "classify_herbs_and_spices", side_effect=mark("spices")))
+            stack.enter_context(patch.object(sync, "triage_implausible_nutrition", side_effect=mark("triage")))
             stack.enter_context(patch.object(sync, "compute_weights_and_quantities", side_effect=mark("weights")))
             stack.enter_context(patch.object(sync, "validate_atwater", side_effect=mark("atwater")))
             stack.enter_context(patch.object(sync, "warn_suspicious_overrides", side_effect=mark("warnings")))
@@ -155,7 +157,7 @@ class PipelineServicesTests(unittest.TestCase):
             calls,
             [
                 "receipt_sync", "seed_catalog", "overrides_initial", "receipt_import",
-                "seed_refresh", "off_enrichment", "non_food", "weights", "ai_enrichment", "atwater",
+                "seed_refresh", "off_enrichment", "non_food", "spices", "weights", "triage", "ai_enrichment", "atwater",
                 "overrides_final", "warnings", "review", "chat_batch", "exports",
             ],
         )

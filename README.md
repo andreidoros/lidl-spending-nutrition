@@ -43,9 +43,12 @@ local cache are never uploaded anywhere and are excluded from this repository.
 3. **Matches products** against a localized catalog shipped in `data/catalogs/` and,
    when needed, against the Open Food Facts API.
 4. **Validates nutrition labels** with an Atwater consistency check on every food
-   product, so impossible calorie/macro combinations are flagged instead of silently
-   accepted. Values from the shipped catalog or your own edits are kept and listed for
-   review; unconfirmed new Open Food Facts values are discarded.
+   product, so impossible calorie/macro combinations are never silently accepted.
+   Implausible values are emptied and the product is completed again like any other
+   incomplete product; values you saved yourself are kept. Fibre is tolerated whether
+   the label counts it inside carbs or separately. Dried herbs and spices get their own
+   category (rules in `data/catalogs/<country>/spice_rules.json`) and skip the energy
+   check, because their labels rarely balance.
 5. **Computes Nutri-Score** (the 2023 algorithm) for the products that have complete
    nutrition data.
 6. **Stores everything in DuckDB** and exports two compact Parquet files for Power BI:
@@ -374,9 +377,9 @@ Open **Review products** in the app. Incomplete products are listed with the mis
 fields; you can fill them in manually or let AI suggest values.
 
 **A product's calories do not match its protein, carbs and fat.**
-It appears in **Review products** with a *Check* status. Correct the values from the
-label, or tick **Values checked** if the label really says so, then click
-**Save changes**. Confirmed values are not flagged again.
+The sync empties its nutrition and lists it in **Review products** as *Incomplete ·
+values cleared*, so Groq or your chatbot can fill it again. If the label really says
+so, type its values and click **Save changes**; values you save are never cleared.
 
 **The report opens but charts are empty.**
 Refresh the model after changing the parameter, and make sure the slicers are not

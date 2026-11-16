@@ -50,8 +50,11 @@ ATWATER_CORE_FIELDS: tuple[str, ...] = (
     "carbs_100g",
     "fat_100g",
 )
-REVIEW_REASON_INCOMPLETE = "incomplete"
-REVIEW_REASON_ATWATER = "atwater"
+# Dried herbs and spices: label energy rarely balances (fibre, essential oils,
+# carbs reported with or without fibre), so they skip the energy and mass checks.
+HERBS_AND_SPICES = "Herbs & Spices"
+ATWATER_EXEMPT_ENERGY = frozenset({"Alcoholic Beverages", HERBS_AND_SPICES})
+CLEARED_NOTE_PREFIX = "CLEARED: "
 
 
 def _number(value: object) -> float | None:
@@ -64,13 +67,20 @@ def _number(value: object) -> float | None:
     return None if math.isnan(number) else number
 
 
-def atwater_check(product: Mapping[str, object]) -> str | None:
-    """Return a short review message when stored nutrients look implausible.
+def atwater_energy(protein: float, carbs: float, fat: float, fiber: float) -> float:
+    """Energy (kcal/100 g) from the EU Atwater factors."""
+    return protein * 4.0 + carbs * 4.0 + fat * 9.0 + fiber * 2.0
 
-    Mirrors the rules of the sync's Atwater validation (same order, formula and
-    tolerance) but never changes data. Non-Food products and products missing
-    a core input are not checked; alcoholic beverages skip only the energy
-    balance, as in the sync.
+
+def atwater_check(product: Mapping[str, object]) -> str | None:
+    """Return a short message when stored nutrients look implausible, else None.
+
+    Single source of truth for the sync's Atwater validation and the review.
+    Non-Food products and products missing a core input are not checked.
+    Alcoholic beverages and herbs & spices skip the energy balance (and herbs &
+    spices the mass check too). Fibre is tolerated both ways: a label may
+    report carbs with fibre already included (non-EU style) or count fibre
+    separately, so the check passes when either reading balances.
     """
     category = _text(product.get("category"))
     if category == "Non-Food" or _text(product.get("match_status")) == "NON_FOOD":
@@ -85,18 +95,101 @@ def atwater_check(product: Mapping[str, object]) -> str | None:
 
     if min(kcal, protein, carbs, fat) < 0:
         return "Negative nutrient value"
-    if protein + carbs + fat + fiber + salt > 105.0:
+    # Fibre already inside carbs must not be counted twice.
+    if category != HERBS_AND_SPICES and protein + max(carbs, fiber) + fat + salt > 105.0:
         return "Nutrients add up to more than 100 g"
     if sugars > carbs + 1.0:
         return "Sugar is higher than carbs"
     if saturated > fat + 1.0:
         return "Saturated fat is higher than fat"
-    if category == "Alcoholic Beverages":
+    if category in ATWATER_EXEMPT_ENERGY:
         return None
-    calculated = protein * 4.0 + carbs * 4.0 + fat * 9.0 + fiber * 2.0
-    if abs(kcal - calculated) > max(25.0, kcal * 0.20):
+    tolerance = max(25.0, kcal * 0.20)
+    calculated = atwater_energy(protein, carbs, fat, fiber)
+    readings = (calculated, atwater_energy(protein, max(carbs - fiber, 0.0), fat, fiber))
+    if min(abs(kcal - value) for value in readings) > tolerance:
         return f"Calories {kcal:g} declared vs {round(calculated, 1):g} calculated"
     return None
+
+
+def clear_implausible_nutrition(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    ai_state: str = "retry",
+) -> list[tuple[str, str]]:
+    """Empty all nutrients of Food products that fail ``atwater_check``.
+
+    The product then counts as incomplete, so Groq or the chatbot batch fills it
+    again. Manually protected fields are kept; a product whose four core values
+    are all protected was confirmed by a person and is left alone.
+
+    ``ai_state`` decides what happens to a previous successful AI nutrition
+    task: ``"retry"`` deletes it so Groq is asked again (used before AI runs),
+    ``"reject"`` marks it invalid so Groq does not repeat a bad answer on every
+    sync; the chatbot batch still lists the product. Returns ``(key, issue)``.
+    """
+    if ai_state not in {"retry", "reject"}:
+        raise ValueError(f"Unknown ai_state {ai_state!r}")
+    create_schema(con)
+    fields = ("product_key", "category", "match_status", *NUTRIENT_FIELDS)
+    rows = con.execute(f"SELECT {', '.join(fields)} FROM nutrition_cache").fetchall()
+    protected: dict[str, set[str]] = {}
+    for key, field_name in con.execute(
+        f"SELECT product_key, field_name FROM {METADATA_TABLE} WHERE is_protected"
+    ).fetchall():
+        protected.setdefault(key, set()).add(field_name)
+
+    failures: list[tuple[str, str]] = []
+    for raw in rows:
+        product = dict(zip(fields, raw))
+        key = product["product_key"]
+        if set(ATWATER_CORE_FIELDS) <= protected.get(key, set()):
+            continue
+        issue = atwater_check(product)
+        if issue is not None:
+            failures.append((key, issue))
+    if not failures:
+        return []
+
+    con.execute("BEGIN TRANSACTION")
+    try:
+        for key, issue in failures:
+            kept = protected.get(key, set())
+            cleared = [name for name in NUTRIENT_FIELDS if name not in kept]
+            assignments = ", ".join(f"{name} = NULL" for name in cleared)
+            con.execute(
+                f"""UPDATE nutrition_cache SET {assignments},
+                        atwater_debug = ?,
+                        is_verified = FALSE,
+                        match_status = CASE WHEN match_status = 'NOT_FOUND_OFF' THEN match_status
+                                            ELSE 'QUARANTINE_ATWATER_FAIL' END
+                    WHERE product_key = ?""",
+                [CLEARED_NOTE_PREFIX + issue, key],
+            )
+            con.executemany(
+                f"DELETE FROM {METADATA_TABLE} WHERE product_key = ? AND field_name = ? AND NOT is_protected",
+                [(key, name) for name in cleared],
+            )
+            if ai_state == "retry":
+                con.execute(
+                    f"DELETE FROM {AI_STATE_TABLE} WHERE product_key = ? AND task = 'nutrition' AND status = 'succeeded'",
+                    [key],
+                )
+            else:
+                con.execute(
+                    f"""UPDATE {AI_STATE_TABLE} SET status = 'invalid', error_code = 'atwater_failed',
+                            updated_at = now()
+                        WHERE product_key = ? AND task = 'nutrition' AND status = 'succeeded'""",
+                    [key],
+                )
+        con.execute("COMMIT")
+    except Exception:
+        try:
+            con.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
+    return failures
 
 
 def missing_required_fields(
@@ -780,65 +873,25 @@ def list_review_products(
     con: duckdb.DuckDBPyConnection,
     category_to_macro: Mapping[str, str],
 ) -> list[dict[str, object]]:
-    """Build the review worklist: incomplete products plus implausible nutrition.
+    """Build the review worklist: every incomplete product.
 
-    Every Food product with the four Atwater inputs is checked on each call.
-    A product is listed for Atwater only while its core values are not all
-    manually protected; saving them by hand is the person's confirmation.
-    ``list_incomplete_products`` keeps the completeness-only list.
+    Implausible nutrition is not a separate review reason: the sync empties it
+    (``clear_implausible_nutrition``), so those products are incomplete and
+    carry the reason in ``cleared_reason`` for the status text.
     """
-    fields = ("product_key", "sample_name") + FIELD_NAMES + (
-        "match_status", "off_product_name", "atwater_debug"
-    )
-    rows = con.execute(
-        f"SELECT {', '.join(fields)} FROM nutrition_cache"
-    ).fetchall()
-    try:
-        protected_counts = dict(con.execute(
-            f"""SELECT product_key, COUNT(DISTINCT field_name) FROM {METADATA_TABLE}
-                WHERE is_protected AND field_name IN ({', '.join('?' for _ in ATWATER_CORE_FIELDS)})
-                GROUP BY 1""",
-            list(ATWATER_CORE_FIELDS),
-        ).fetchall())
-    except duckdb.CatalogException:
-        protected_counts = {}
-    purchases = dict(con.execute(
-        """SELECT TRIM(CAST(COALESCE(NULLIF(TRIM(ean), ''), raw_code) AS VARCHAR)) AS k,
-                  COUNT(*) FROM purchases GROUP BY 1"""
-    ).fetchall())
-
-    products: list[dict[str, object]] = []
-    for raw in rows:
-        product = dict(zip(fields, raw))
-        missing = missing_required_fields(product, category_to_macro)
-        confirmed = protected_counts.get(product["product_key"], 0) == len(ATWATER_CORE_FIELDS)
-        issue = None if confirmed else atwater_check(product)
-        if not missing and issue is None:
-            continue
-        reasons = []
-        if missing:
-            reasons.append(REVIEW_REASON_INCOMPLETE)
-        if issue is not None:
-            reasons.append(REVIEW_REASON_ATWATER)
-        product["times_bought"] = purchases.get(product["product_key"], 0)
-        product["missing_fields"] = missing
-        product["atwater_issue"] = issue
-        product["review_reasons"] = tuple(reasons)
-        products.append(product)
-
-    products.sort(key=lambda row: (-int(row["times_bought"] or 0), _text(row.get("sample_name")).casefold(), _text(row.get("product_key"))))
+    products = list_incomplete_products(con, category_to_macro)
+    for product in products:
+        note = _text(product.get("atwater_debug"))
+        product["cleared_reason"] = (
+            note[len(CLEARED_NOTE_PREFIX):] if note.startswith(CLEARED_NOTE_PREFIX) else None
+        )
     return products
 
 
 def review_status_text(product: Mapping[str, object]) -> str:
     """Human-readable review status shared by the review CSV and the app."""
-    parts = []
-    if REVIEW_REASON_INCOMPLETE in (product.get("review_reasons") or ()):
-        parts.append("Incomplete")
-    issue = product.get("atwater_issue")
-    if issue:
-        parts.append(f"Check: {issue}")
-    return " · ".join(parts)
+    reason = product.get("cleared_reason")
+    return f"Incomplete · values cleared: {reason}" if reason else "Incomplete"
 
 
 def regenerate_review_csv(

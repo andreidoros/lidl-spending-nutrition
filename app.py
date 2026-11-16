@@ -20,9 +20,6 @@ from app_settings import (
     save_ai_settings,
 )
 from product_store import (
-    NUTRIENT_FIELDS,
-    REVIEW_REASON_ATWATER,
-    REVIEW_REASON_INCOMPLETE,
     missing_required_fields,
     review_status_text,
 )
@@ -82,7 +79,7 @@ TABLE_COLUMNS = (
     "salt_100g",
 )
 NUMERIC_COLUMNS = TABLE_COLUMNS[3:]
-REVIEW_TABLE_COLUMNS = ("review_status", "values_checked") + TABLE_COLUMNS
+REVIEW_TABLE_COLUMNS = ("review_status",) + TABLE_COLUMNS
 FIELD_LABELS = {
     "sample_name": "Product",
     "macro_category": "Group",
@@ -106,7 +103,6 @@ def _empty_review_state() -> None:
     st.session_state.setdefault("review_open", False)
     st.session_state.setdefault("review_base", None)
     st.session_state.setdefault("review_manual", {})
-    st.session_state.setdefault("review_confirmed", {})
     st.session_state.setdefault("review_suggestions", {})
     st.session_state.setdefault("chat_response_input", "")
     st.session_state.setdefault("chat_preview", None)
@@ -138,7 +134,6 @@ def _blank(value: Any) -> Any:
 def _has_review_draft() -> bool:
     return bool(
         st.session_state.review_manual
-        or st.session_state.review_confirmed
         or st.session_state.review_suggestions
         or st.session_state.chat_response_input.strip()
     )
@@ -187,24 +182,9 @@ def _read_review(*, force: bool = False) -> None:
     if st.session_state.review_initial_keys is None:
         st.session_state.review_initial_keys = tuple(st.session_state.review_base)
     st.session_state.review_manual = {}
-    st.session_state.review_confirmed = {}
     st.session_state.review_suggestions = {}
     st.session_state.chat_preview = None
     st.session_state.chat_preview_response = None
-
-
-def _review_reasons(product: dict[str, Any]) -> tuple[str, ...]:
-    # Older snapshots without reasons came from the incomplete-only worklist.
-    return tuple(product.get("review_reasons") or (REVIEW_REASON_INCOMPLETE,))
-
-
-def _needs_atwater_check(product: dict[str, Any]) -> bool:
-    return REVIEW_REASON_ATWATER in _review_reasons(product) and bool(product.get("atwater_issue"))
-
-
-def _incomplete_review_products(base: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Products that AI completion may target; nutrition-to-check rows are excluded."""
-    return {key: product for key, product in base.items() if REVIEW_REASON_INCOMPLETE in _review_reasons(product)}
 
 
 def _display_rows() -> pd.DataFrame:
@@ -230,8 +210,7 @@ def _display_rows() -> pd.DataFrame:
                 if field not in manual.get(key, {}):
                     row[field] = None
         row["macro_category"] = taxonomy.category_to_macro.get(category) or ""
-        row["review_status"] = review_status_text(product) if product.get("review_reasons") else "Incomplete"
-        row["values_checked"] = bool(st.session_state.review_confirmed.get(key))
+        row["review_status"] = review_status_text(product)
         rows.append(row)
         keys.append(key)
     frame = pd.DataFrame(rows, columns=REVIEW_TABLE_COLUMNS, index=pd.Index(keys, name="product_key"))
@@ -248,11 +227,6 @@ def _capture_editor_changes(edited: pd.DataFrame, rendered: pd.DataFrame) -> Non
         product_key = str(key)
         if product_key not in base:
             continue
-        if _needs_atwater_check(base[product_key]):
-            if bool(edited.at[key, "values_checked"]):
-                st.session_state.review_confirmed[product_key] = True
-            else:
-                st.session_state.review_confirmed.pop(product_key, None)
         for column in TABLE_COLUMNS:
             if column in {"sample_name", "macro_category"}:
                 continue
@@ -267,17 +241,6 @@ def _manual_edits_for_save() -> dict[str, dict[str, Any]]:
     for key, fields in st.session_state.review_manual.items():
         if fields:
             edits[key] = {field: _blank(value) for field, value in fields.items()}
-    # "Values checked" saves the shown nutrition as manual values. Protected
-    # manual values are the confirmation that removes the Atwater warning.
-    base = st.session_state.review_base or {}
-    for key in st.session_state.review_confirmed:
-        product = base.get(key)
-        if product is None:
-            continue
-        confirmed = edits.setdefault(key, {})
-        for field in NUTRIENT_FIELDS:
-            if field not in confirmed and _blank(product.get(field)) is not None:
-                confirmed[field] = product.get(field)
     return edits
 
 
@@ -396,7 +359,7 @@ def _render_groq_controls(base: dict[str, dict[str, Any]]) -> None:
             report = pipeline_services.retry_ai_products(targets, DB_PATH, callback)
             _invalidate_product_snapshot()
             _read_review(force=True)
-            remaining = set(_incomplete_review_products(st.session_state.review_base or {}))
+            remaining = set(st.session_state.review_base or {})
             enrichment = report.enrichment
             st.session_state.groq_summary = {
                 "requested": len(targets),
@@ -452,18 +415,16 @@ def _render_review() -> None:
     sync = pipeline_services._load_sync_module()
     taxonomy = load_taxonomy(sync.TAXONOMY_PATH)
     initial_count = len(st.session_state.review_initial_keys or ())
-    incomplete = _incomplete_review_products(base)
-    to_check = len([product for product in base.values() if _needs_atwater_check(product)])
+    cleared = len([product for product in base.values() if product.get("cleared_reason")])
     badge_slot.markdown(
         '<div style="text-align:right">'
-        f'<span class="incomplete-badge">{len(incomplete)} incomplete · {to_check} to check</span>'
+        f'<span class="incomplete-badge">{len(base)} incomplete products</span>'
         "</div>",
         unsafe_allow_html=True,
     )
     st.subheader("What needs attention")
     st.write(
-        f"{len(base)} product(s) need attention — {len(incomplete)} incomplete, {to_check} with nutrition to check. "
-        f"{initial_count} when you opened this review."
+        f"{len(base)} product(s) still incomplete — {initial_count} when you opened this review."
     )
     summary = st.session_state.groq_summary
     if summary:
@@ -479,13 +440,13 @@ def _render_review() -> None:
                 details = []
                 if missing:
                     details.append(f"Missing: {', '.join(FIELD_LABELS.get(field, field) for field in missing)}")
-                if _needs_atwater_check(product):
-                    details.append(f"Check: {product['atwater_issue']}")
+                if product.get("cleared_reason"):
+                    details.append(f"Values cleared: {product['cleared_reason']}")
                 st.write(f"{product.get('sample_name') or product['product_key']} — {' · '.join(details)}")
             if summary:
                 st.caption("Incomplete products still have missing fields. This does not always mean Groq gave a bad answer. Use your chatbot or edit them below.")
-            if to_check:
-                st.caption("Nutrition to check: calories do not match protein, carbs and fat. Correct the values, or tick Values checked if the label really says so, then Save changes.")
+            if cleared:
+                st.caption("Values cleared: calories did not match protein, carbs and fat, so the nutrition was emptied for Groq or your chatbot to fill again. If the label really says so, type its values and click Save changes; values you save are kept.")
     if not base:
         st.success("No products currently need review.")
         _save_settings()
@@ -508,10 +469,6 @@ def _render_review() -> None:
         disabled=True if st.session_state.product_edits else ["review_status", "sample_name", "macro_category"],
         column_config={
             "review_status": st.column_config.TextColumn("Status"),
-            "values_checked": st.column_config.CheckboxColumn(
-                "Values checked",
-                help="Only for nutrition to check: confirms the current values as correct when saved.",
-            ),
             "sample_name": st.column_config.TextColumn(FIELD_LABELS["sample_name"]),
             "macro_category": st.column_config.TextColumn(FIELD_LABELS["macro_category"]),
             "category": st.column_config.SelectboxColumn(
@@ -524,10 +481,10 @@ def _render_review() -> None:
         },
     )
     _capture_editor_changes(editor_result, rendered)
-    if st.session_state.review_manual or st.session_state.review_confirmed:
+    if st.session_state.review_manual:
         st.caption("You have unsaved changes. Click Save changes below.")
     with groq_controls:
-        _render_groq_controls(incomplete)
+        _render_groq_controls(base)
 
     with chatbot_column, st.container(border=True):
         st.subheader("Use your chatbot")
@@ -675,7 +632,6 @@ def _render_review() -> None:
     with col_discard:
         if st.button("Discard changes", key="discard_review", disabled=not _has_review_draft(), icon=":material/undo:"):
             st.session_state.review_manual = {}
-            st.session_state.review_confirmed = {}
             st.session_state.review_suggestions = {}
             st.session_state["clear_chat_response_next_run"] = True
             st.session_state.chat_preview = None
