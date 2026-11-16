@@ -8,6 +8,11 @@ spending, prices and nutrition.
 Everything runs on your own computer. Receipts, prices, the local database and the
 local cache are never uploaded anywhere and are excluded from this repository.
 
+<img width="1423" height="799" alt="image" src="https://github.com/user-attachments/assets/76fb5566-2fc7-4669-a2d0-6b9cff421720" />
+<img width="1425" height="799" alt="image" src="https://github.com/user-attachments/assets/2fc39555-0023-4b28-88aa-5b79c88333cc" />
+<img width="1422" height="801" alt="image" src="https://github.com/user-attachments/assets/16d0a05f-0e0f-440f-a8eb-aab97d16b4b4" />
+<img width="1421" height="797" alt="image" src="https://github.com/user-attachments/assets/b37bf568-8c7f-466e-9ef0-8c0c6bd3550c" />
+
 > **Independent project. Not affiliated with Lidl.**
 
 ---
