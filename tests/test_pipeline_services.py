@@ -866,6 +866,76 @@ class PipelineServicesTests(unittest.TestCase):
             )
         self.assertEqual(failures, ("exports",))
 
+    def _create_weight_db(self):
+        self._create_chat_import_db()
+        con = duckdb.connect(str(self.db_path))
+        con.execute("ALTER TABLE nutrition_cache ADD COLUMN is_weighed_default BOOLEAN DEFAULT FALSE")
+        con.execute("DROP TABLE purchases")
+        con.execute(
+            "CREATE TABLE purchases (ean VARCHAR, raw_code VARCHAR, quantity DECIMAL(12,3), "
+            "line_total DECIMAL(10,2), net_line_total DECIMAL(10,2))"
+        )
+        # 000123 (milk) is complete but has a package weight of 50 g: not listed.
+        rows = [
+            ("50980", "Rulou cu mere", "Desserts & Pastries", None, False),
+            ("50535", "Varza alba", "Fresh Fruits & Vegetables", None, True),
+            ("4056489000001", "Carne tocata", "Fresh Meat & Fish", None, False),
+            ("4056489000002", "Saci menajeri", "Non-Food", None, False),
+            ("4056489000003", "Never bought", "Dairy & Eggs", None, False),
+        ]
+        for key, name, category, weight, weighed in rows:
+            con.execute(
+                "INSERT INTO nutrition_cache (product_key, sample_name, category, macro_category, "
+                "kcal_100g, proteins_100g, carbs_100g, sugars_100g, fat_100g, saturated_fat_100g, salt_100g, "
+                "package_weight_g, is_weighed_default) VALUES (?, ?, ?, 'Fresh Food', 1, 1, 1, 1, 1, 1, 1, ?, ?)",
+                [key, name, category, weight, weighed],
+            )
+        for key, quantity, spend in [("50980", 2, 6.0), ("50980", 1, 3.0), ("50535", 1.2, 2.3),
+                                     ("4056489000001", 1, 20.0), ("4056489000002", 1, 4.0),
+                                     ("000123", 1, 5.0)]:
+            con.execute("INSERT INTO purchases VALUES (NULL, ?, ?, ?, ?)", [key, quantity, spend, spend])
+        con.close()
+
+    def test_weight_worklist_lists_bought_food_without_weight_by_spend(self):
+        self._create_weight_db()
+        worklist = pipeline_services.read_weight_worklist(None, self.db_path)
+        self.assertEqual([p["product_key"] for p in worklist], ["4056489000001", "50980"])
+        meat, roll = worklist
+        self.assertEqual((meat["sold_as"], meat["times_bought"], meat["spend"]), ("package", 1, 20.0))
+        self.assertEqual((roll["sold_as"], roll["times_bought"], roll["units"]), ("per piece", 2, 3.0))
+
+        # A visit keeps its rows after a weight is typed.
+        con = duckdb.connect(str(self.db_path))
+        con.execute("UPDATE nutrition_cache SET package_weight_g = 90 WHERE product_key = '50980'")
+        con.close()
+        again = pipeline_services.read_weight_worklist(["50980", "4056489000001"], self.db_path)
+        self.assertEqual({p["product_key"]: p["package_weight_g"] for p in again},
+                         {"50980": 90.0, "4056489000001": None})
+
+    def test_weight_request_and_import_for_a_complete_product(self):
+        self._create_weight_db()
+        prompt = pipeline_services.weight_batch_text(["50980", "4056489000001"], self.db_path)
+        self.assertIn('"sold_as": "per piece"', prompt)
+        self.assertIn("4056489000001", prompt)
+        self.assertNotIn("kcal_100g", prompt)
+
+        answer = '{"products": [{"product_key": "50980", "package_weight_g": 90}]}'
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sync, "REVIEW_QUEUE_PATH", self.root / "review.csv"))
+            stack.enter_context(patch.object(sync, "export_views_for_bi", side_effect=lambda _con: None))
+            preview = pipeline_services.preview_chat_import(answer, self.db_path)
+            self.assertEqual(preview.fields_suggested, 1)
+            report = pipeline_services.save_review_session(
+                manual_edits={}, baselines={}, response_text=answer,
+                db_path=self.db_path, output_path=self.root / "ai_chat_batch.txt",
+            )
+        self.assertEqual(report.chat_import.fields_saved, 1)
+        check = duckdb.connect(str(self.db_path), read_only=True)
+        self.assertEqual(check.execute(
+            "SELECT package_weight_g FROM nutrition_cache WHERE product_key='50980'"
+        ).fetchone()[0], 90.0)
+        check.close()
+
     def test_read_products_returns_all_or_chosen_products_with_provenance(self):
         self._create_chat_import_db()
         con = duckdb.connect(str(self.db_path))

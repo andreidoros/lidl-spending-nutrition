@@ -80,7 +80,7 @@ COLUMN_TITLES = {
     "salt_100g": "Salt",
 }
 COMPLETE_STATUS = "Complete"
-VIEWS = ("todo", "all", "settings")
+VIEWS = ("todo", "weights", "all", "settings")
 EXPORT_DELAY_SECONDS = 1.5
 UNDO_LIMIT = 20
 
@@ -230,6 +230,7 @@ def _init_state() -> None:
         "notice": None,               # (level, text) shown above the table
         "undo_stack": [],             # last saved cell edits, newest last
         "todo_keys": None,            # rows of "To complete", fixed per visit
+        "weight_keys": None,          # rows of "Missing weight", fixed per visit
         "products_cache": None,       # all products, dropped after each save
         "editor_versions": {},        # bumped to reset a table to DB values
         "editor_context": {},         # what each table last showed
@@ -316,6 +317,7 @@ def _on_view_change() -> None:
     # A new visit to "To complete" lists what is incomplete now; products
     # completed during the last visit drop out only at this point.
     st.session_state.todo_keys = None
+    st.session_state.weight_keys = None
     st.session_state.notice = None
 
 
@@ -576,23 +578,37 @@ def _report_files_status() -> None:
 # Table
 # --------------------------------------------------------------------------
 
-def _render_table(view: str, products: list[dict[str, Any]], *, with_status: bool) -> None:
+WEIGHT_TABLE_COLUMNS = (
+    "review_status", "sample_name", "category", "sold_as", "times_bought", "spend", "package_weight_g",
+)
+
+
+def _render_table(
+    view: str,
+    products: list[dict[str, Any]],
+    *,
+    columns: tuple[str, ...] = TABLE_COLUMNS,
+    status: Any = None,
+    editable: tuple[str, ...] = EDITABLE_COLUMNS,
+) -> None:
+    """An autosaving product table. ``status(product)`` fills the Status
+    column; only ``editable`` columns accept edits."""
     taxonomy = _taxonomy()
     keys = [str(product["product_key"]) for product in products]
-    columns = REVIEW_TABLE_COLUMNS if with_status else TABLE_COLUMNS
     records = []
     shown: dict[str, dict[str, Any]] = {}
     for product in products:
         values = {field: product.get(field) for field in TABLE_COLUMNS}
         values["__field_metadata__"] = product.get("field_metadata", {})
         shown[str(product["product_key"])] = values
-        record = {field: product.get(field) for field in TABLE_COLUMNS}
-        if with_status:
-            record["review_status"] = _status(product, taxonomy.category_to_macro)
+        record = {column: product.get(column) for column in columns}
+        if "review_status" in columns:
+            record["review_status"] = status(product) if status else ""
         records.append(record)
     frame = pd.DataFrame(records, columns=columns, index=pd.Index(keys, name="product_key"))
-    for column in NUMERIC_COLUMNS:
-        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    for column in NUMERIC_COLUMNS + ("times_bought", "spend"):
+        if column in frame:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
 
     digest = hashlib.sha1("|".join(keys).encode()).hexdigest()[:10]
     version = st.session_state.editor_versions.get(view, 0)
@@ -606,11 +622,17 @@ def _render_table(view: str, products: list[dict[str, Any]], *, with_status: boo
         height=min(600, 35 * (len(frame) + 1) + 3),
         num_rows="fixed",
         placeholder="",
-        disabled=["review_status", "sample_name", "macro_category"],
+        disabled=[column for column in columns if column not in editable],
         on_change=_on_table_edit,
         args=(editor_key,),
         column_config={
             "review_status": st.column_config.TextColumn("Status", width=130),
+            "sold_as": st.column_config.TextColumn(
+                "Sold as", width=95, help="Per piece: counter or bakery items. Package: the whole pack."
+            ),
+            "times_bought": st.column_config.NumberColumn("Bought", format="%d", width=75,
+                                                          help="Receipt lines with this product."),
+            "spend": st.column_config.NumberColumn("Spent (lei)", format="%.2f", width=100),
             "sample_name": st.column_config.TextColumn("Product", pinned=True, width=240),
             "macro_category": st.column_config.TextColumn(
                 "Group", help="Follows from the category.", width=125
@@ -685,13 +707,53 @@ def _render_todo() -> None:
         st.success("Nothing to complete. Every product has a category and nutrition values.",
                    icon=":material/task_alt:")
         return
-    _render_table("todo", products, with_status=True)
+    _render_table("todo", products, columns=REVIEW_TABLE_COLUMNS,
+                  status=lambda product: _status(product, taxonomy.category_to_macro))
     if any(product.get("cleared_reason") for product in incomplete):
         st.caption(
             "\"Values cleared\": the calories did not match protein, carbs and fat, so the nutrition "
             "was emptied to be filled again. If the label really says so, type its values; "
             "values you type are kept."
         )
+
+
+def _weight_products() -> list[dict[str, Any]]:
+    if st.session_state.weight_keys is None:
+        st.session_state.weight_keys = [
+            product["product_key"] for product in pipeline_services.read_weight_worklist(None, DB_PATH)
+        ]
+    return pipeline_services.read_weight_worklist(st.session_state.weight_keys, DB_PATH)
+
+
+def _weight_status(product: Mapping[str, Any]) -> str:
+    return COMPLETE_STATUS if product.get("package_weight_g") else "Missing"
+
+
+def _render_weights() -> None:
+    products = _weight_products()
+    missing = [product for product in products if not product.get("package_weight_g")]
+    if not products:
+        default = ""
+    elif missing:
+        default = "Type the weight in grams: one piece for *per piece*, the whole pack for *package*."
+    else:
+        default = ":green[:material/task_alt:] All done. These products have a weight now."
+    with st.container(horizontal=True, vertical_alignment="center", gap="small"):
+        _render_notice(default)
+        st.space("stretch")
+        names = {product["product_key"]: product.get("sample_name") for product in products}
+        st.button("Use your chatbot", key="open_weight_chatbot", icon=":material/chat:",
+                  disabled=not missing, on_click=_open_dialog,
+                  args=("chatbot_weights", [product["product_key"] for product in missing], names))
+    if not products:
+        st.success("Every food product you bought has a weight.", icon=":material/task_alt:")
+        return
+    _render_table("weights", products, columns=WEIGHT_TABLE_COLUMNS, status=_weight_status,
+                  editable=("package_weight_g",))
+    st.caption(
+        "Without a weight a product is left out of the grams and nutrition totals in the report. "
+        "Loose produce sold by the kilo is weighed on the receipt and never shows up here."
+    )
 
 
 def _render_all() -> None:
@@ -712,7 +774,7 @@ def _render_all() -> None:
     if not products:
         st.info("No product matches. Try a shorter part of the name.")
         return
-    _render_table("all", products, with_status=False)
+    _render_table("all", products)
 
 
 def _render_settings() -> None:
@@ -784,7 +846,7 @@ def _progress(label: str):
 def _open_dialog(name: str, keys: list[str], names: Mapping[str, Any]) -> None:
     """Dialogs stay open across reruns until closed or finished."""
     st.session_state.dialog = {"name": name, "keys": list(keys), "names": dict(names)}
-    if name == "chatbot":
+    if name in {"chatbot", "chatbot_weights"}:
         st.session_state.chat_prompt = None
         st.session_state.chat_preview = None
         st.session_state.chat_preview_response = None
@@ -802,6 +864,8 @@ def _render_open_dialog() -> None:
         _groq_dialog(dialog["keys"], dialog["names"])
     elif dialog["name"] == "chatbot":
         _chatbot_dialog(dialog["names"])
+    elif dialog["name"] == "chatbot_weights":
+        _chatbot_dialog(dialog["names"], weight_keys=dialog["keys"])
 
 
 @st.dialog("Complete with Groq", width="medium", on_dismiss=_close_dialog)
@@ -870,14 +934,18 @@ def _suggestion_rows(preview, names: Mapping[str, Any]) -> pd.DataFrame:
 
 
 @st.dialog("Use your chatbot", width="large", on_dismiss=_close_dialog)
-def _chatbot_dialog(names: Mapping[str, Any]) -> None:
+def _chatbot_dialog(names: Mapping[str, Any], weight_keys: list[str] | None = None) -> None:
+    """Weight-only request when ``weight_keys`` is given, else the review batch."""
     state = st.session_state
     if state.chat_prompt is None:
         try:
-            pipeline_services.refresh_chat_batch(DB_PATH, CHAT_BATCH_PATH)
-            state.chat_prompt = (
-                CHAT_BATCH_PATH.read_text(encoding="utf-8") if CHAT_BATCH_PATH.is_file() else ""
-            )
+            if weight_keys is not None:
+                state.chat_prompt = pipeline_services.weight_batch_text(weight_keys, DB_PATH)
+            else:
+                pipeline_services.refresh_chat_batch(DB_PATH, CHAT_BATCH_PATH)
+                state.chat_prompt = (
+                    CHAT_BATCH_PATH.read_text(encoding="utf-8") if CHAT_BATCH_PATH.is_file() else ""
+                )
         except Exception as exc:  # noqa: BLE001
             st.error(f"Could not prepare the request ({type(exc).__name__}).")
             return
@@ -939,6 +1007,7 @@ def _chatbot_dialog(names: Mapping[str, Any]) -> None:
         _set_notice("success", f"Saved {saved} value{'s' if saved != 1 else ''} from your chatbot.")
         _data_changed()
         _reset_table("todo")
+        _reset_table("weights")
         _close_dialog()
         st.rerun()
 
@@ -1014,15 +1083,18 @@ def main() -> None:
                       disabled=running, on_click=_start_sync,
                       help="Bring in new receipts, then complete and export products.")
 
-    review_count = None
+    review_count = weight_count = None
     if has_db and not running:
         try:
             review_count = len(pipeline_services.read_review_products(DB_PATH))
+            weight_count = len(pipeline_services.read_weight_worklist(None, DB_PATH))
         except pipeline_services.PipelineBusyError:
-            review_count = None
+            review_count = weight_count = None
     labels = {
         "todo": ":material/fact_check: To complete"
         + (f" ({review_count})" if review_count is not None else ""),
+        "weights": ":material/scale: Missing weight"
+        + (f" ({weight_count})" if weight_count is not None else ""),
         "all": ":material/inventory_2: All products",
         "settings": ":material/settings: Settings",
     }
@@ -1051,6 +1123,8 @@ def main() -> None:
             try:
                 if view == "todo":
                     _render_todo()
+                elif view == "weights":
+                    _render_weights()
                 elif view == "all":
                     _render_all()
                 else:

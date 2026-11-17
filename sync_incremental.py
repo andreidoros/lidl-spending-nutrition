@@ -47,6 +47,10 @@ TAXONOMY_PATH = UNIVERSAL_TAXONOMY_PATH if UNIVERSAL_TAXONOMY_PATH.exists() else
 SEED_CATALOG_PATH = COUNTRY_CATALOG_DIR / "catalog_seed.csv"
 SPICE_RULES_PATH = COUNTRY_CATALOG_DIR / "spice_rules.json"
 HERBS_AND_SPICES = "Herbs & Spices"
+# Lidl variable-weight barcodes: 13 digits starting with 25, weight in digits 8-12.
+VARIABLE_WEIGHT_KEY_SQL = "({column} LIKE '25%' AND LENGTH({column}) = 13)"
+# A litre value above this is not a food package ("24l" = 24 months, not 24 L).
+MAX_PARSED_LITRES = 10.0
 
 
 @dataclass(frozen=True)
@@ -428,6 +432,8 @@ def parse_weight_from_text(text: str) -> float | None:
     if m:
         val = float(m.group(1))
         unit = m.group(2)
+        if unit == 'l' and val > MAX_PARSED_LITRES:
+            return None
         if unit in ('kg', 'l'):
             return val * 1000.0
         elif unit == 'cl':
@@ -2662,16 +2668,33 @@ def update_review_queue(con: duckdb.DuckDBPyConnection) -> None:
 # 8. PACKAGE WEIGHT DECODING (BULK VS 25... BARCODES)
 # =====================================================================
 def compute_weights_and_quantities(con: duckdb.DuckDBPyConnection) -> None:
-    """Decode piece weights from Lidl variable-weight barcodes, bulk sales, and regex."""
+    """Decide how each product's bought weight is known, then fill package weights.
+
+    A product is *weighed* (receipt quantity in kg) when it was ever bought in
+    a fractional quantity, or when it has a Lidl variable-weight barcode
+    (prefix 25), whose receipt quantity is also in kg. Everything else is
+    sold per piece or per package and needs ``package_weight_g``.
+    """
     print("\n--- STEP 6: Decoding Package Weights & Quantities ---")
 
-    # Barcodes starting with '25' have piece weight encoded in digits 8-12
+    con.execute(f"""
+        UPDATE nutrition_cache
+        SET is_weighed_default = (
+            {VARIABLE_WEIGHT_KEY_SQL.format(column="product_key")}
+            OR product_key IN (
+                SELECT DISTINCT TRIM(CAST(COALESCE(NULLIF(TRIM(ean), ''), raw_code) AS VARCHAR))
+                FROM purchases
+                WHERE (quantity - FLOOR(quantity)) > 0
+            )
+        );
+    """)
+
+    # Barcodes starting with '25' carry the piece weight in digits 8-12; it
+    # stays as information (the receipt quantity already holds the kilograms).
     con.execute("""
         UPDATE nutrition_cache
-        SET 
-            package_weight_g   = CAST(SUBSTRING(product_key, 8, 5) AS DOUBLE),
-            is_weighed_default = FALSE
-        WHERE product_key LIKE '25%' 
+        SET package_weight_g = CAST(SUBSTRING(product_key, 8, 5) AS DOUBLE)
+        WHERE product_key LIKE '25%'
           AND LENGTH(product_key) = 13
           AND NOT EXISTS (
               SELECT 1 FROM product_field_metadata metadata
@@ -2733,21 +2756,14 @@ def compute_weights_and_quantities(con: duckdb.DuckDBPyConnection) -> None:
           AND (nutrition_cache.macro_category IS NULL OR nutrition_cache.kcal_100g IS NULL);
     """)
 
-    # Mark bulk/weighed produce items
-    con.execute("""
+    # Loose produce sold by the kilo has no package weight. Short PLU codes
+    # (50...) sold only in whole pieces are no longer treated as weighed: a
+    # croissant bought twice is two pieces, not two kilograms.
+    con.execute(f"""
         UPDATE nutrition_cache
-        SET 
-            is_weighed_default = TRUE,
-            package_weight_g   = NULL
-        WHERE ((product_key LIKE '50%' AND LENGTH(product_key) <= 5)
-           OR (
-                product_key IN (
-                    SELECT DISTINCT TRIM(CAST(COALESCE(NULLIF(TRIM(ean), ''), raw_code) AS VARCHAR))
-                    FROM purchases
-                    WHERE (quantity - FLOOR(quantity)) > 0
-                )
-                AND NOT (product_key LIKE '25%' AND LENGTH(product_key) = 13)
-           ))
+        SET package_weight_g = NULL
+        WHERE is_weighed_default
+          AND NOT ({VARIABLE_WEIGHT_KEY_SQL.format(column="product_key")})
           AND NOT EXISTS (
               SELECT 1 FROM product_field_metadata metadata
               WHERE metadata.product_key = nutrition_cache.product_key

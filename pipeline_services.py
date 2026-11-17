@@ -526,6 +526,94 @@ def read_products(
     return products
 
 
+def read_weight_worklist(
+    product_keys: list[str] | tuple[str, ...] | None = None,
+    db_path: str | os.PathLike[str] | None = None,
+) -> list[dict[str, object]]:
+    """Bought food whose weight is unknown, most money spent first.
+
+    ``None`` lists products that are bought, not Non-Food, not weighed
+    (``is_weighed_default``) and have no package weight. A key list re-reads
+    those products whatever their weight is now, so a visit can show what was
+    just completed. Each product carries ``sold_as`` ("per piece" for short
+    in-store PLU codes, else "package"), ``times_bought``, ``units`` and
+    ``spend`` besides the fields of ``read_products``.
+    """
+    path = _database_path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Product database does not exist: {path}")
+    keys = None if product_keys is None else [str(key) for key in product_keys]
+    if keys == []:
+        return []
+    with _exclusive_operation(path):
+        connection = duckdb.connect(str(path), read_only=True)
+        try:
+            weighed = (
+                "COALESCE(n.is_weighed_default, FALSE)"
+                if connection.execute(
+                    "SELECT 1 FROM information_schema.columns WHERE table_name = 'nutrition_cache' "
+                    "AND column_name = 'is_weighed_default'"
+                ).fetchone()
+                else "FALSE"
+            )
+            if keys is None:
+                where = (
+                    f"NOT {weighed} AND COALESCE(n.category, '') <> 'Non-Food' "
+                    "AND COALESCE(n.package_weight_g, 0) <= 0"
+                )
+                parameters: list[str] = []
+            else:
+                where = f"n.product_key IN ({', '.join('?' for _ in keys)})"
+                parameters = keys
+            rows = connection.execute(
+                f"""
+                WITH bought AS (
+                    SELECT TRIM(CAST(COALESCE(NULLIF(TRIM(ean), ''), raw_code) AS VARCHAR)) AS product_key,
+                           COUNT(*) AS times_bought,
+                           SUM(quantity) AS units,
+                           SUM(COALESCE(net_line_total, line_total)) AS spend
+                    FROM purchases
+                    GROUP BY 1
+                )
+                SELECT n.product_key, b.times_bought, b.units, b.spend
+                FROM nutrition_cache n
+                JOIN bought b ON b.product_key = n.product_key
+                WHERE {where}
+                """,
+                parameters,
+            ).fetchall()
+        finally:
+            connection.close()
+    stats = {
+        str(key): (int(times), float(units or 0), float(spend or 0))
+        for key, times, units, spend in rows
+    }
+    products = read_products(list(stats), path) if stats else []
+    for product in products:
+        times, units, spend = stats[product["product_key"]]
+        key = product["product_key"]
+        product["sold_as"] = "per piece" if key.isdigit() and len(key) <= 5 else "package"
+        product["times_bought"] = times
+        product["units"] = units
+        product["spend"] = round(spend, 2)
+    products.sort(key=lambda item: (-item["spend"], _search_text(item["sample_name"] or "")))
+    return products
+
+
+def weight_batch_text(
+    product_keys: list[str] | tuple[str, ...],
+    db_path: str | os.PathLike[str] | None = None,
+) -> str:
+    """Chatbot request for the weights of the given products that still lack one."""
+    from ai_enrichment.chat_batch import build_weight_batch_text
+
+    products = [
+        product for product in read_weight_worklist(product_keys, db_path)
+        if not product.get("package_weight_g")
+    ]
+    return build_weight_batch_text(products) or ""
+
+
 def read_review_products(
     db_path: str | os.PathLike[str] | None = None,
 ) -> list[dict[str, object]]:

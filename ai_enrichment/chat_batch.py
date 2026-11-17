@@ -114,6 +114,10 @@ def _requested_fields(
 ) -> tuple[str, ...]:
     missing = set(missing_required_fields(product, category_to_macro))
     if not missing:
+        # A complete product can still lack its package weight (see the
+        # weight-only request); that weight is the only field it accepts.
+        if product.get(PACKAGE_FIELD) is None and PACKAGE_FIELD not in protected:
+            return (PACKAGE_FIELD,)
         return ()
 
     category = product.get("category")
@@ -194,6 +198,38 @@ def build_chat_batch_text(
         json.dumps(products, ensure_ascii=False, indent=2, separators=(",", ": ")),
         "",
         "Response shape: one JSON object with a 'products' array. Each product object contains product_key as a JSON string and only the requested field/value pairs.",
+    ]
+    return "\n".join(lines)
+
+
+def build_weight_batch_text(products: Iterable[Mapping[str, object]]) -> str | None:
+    """A chatbot request for package weights only.
+
+    ``products`` carry ``product_key``, ``sample_name`` and ``sold_as``
+    ("per piece" or "package"). The answer is imported like any chat batch.
+    """
+    items = [
+        {
+            "product_key": str(product["product_key"]),
+            "sample_name": str(product.get("sample_name") or ""),
+            "sold_as": str(product.get("sold_as") or "package"),
+        }
+        for product in products
+    ]
+    if not items:
+        return None
+    lines = [
+        "Estimate the weight of these grocery products bought at Lidl Romania. Use only the product names; do not invent sources.",
+        "Return only one JSON object with a 'products' array. Keep product_key exactly as the input text.",
+        "For each product return product_key and package_weight_g: a number in grams, or null if you cannot tell.",
+        "'per piece' means one item as sold at the counter or bakery (for example one croissant or one avocado);",
+        "'package' means the whole package as sold (for example a tray of minced meat or a pack of 10 eggs).",
+        "Null means unknown and never clears a database value.",
+        "",
+        "Products:",
+        json.dumps(items, ensure_ascii=False, indent=2, separators=(",", ": ")),
+        "",
+        'Response shape: {"products": [{"product_key": "...", "package_weight_g": 120}]}',
     ]
     return "\n".join(lines)
 

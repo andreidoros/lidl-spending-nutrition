@@ -31,10 +31,19 @@ def synthetic_products():
     ]
 
 
+def weight_products():
+    return [
+        {"product_key": "50980", "sample_name": "Rulou cu mere", "category": "Desserts & Pastries",
+         "package_weight_g": None, "field_metadata": {}, "cleared_reason": None,
+         "sold_as": "per piece", "times_bought": 53, "units": 60.0, "spend": 190.0},
+    ]
+
+
 @contextmanager
-def synthetic_app(products=None, *, database=True, ai_configured=True):
+def synthetic_app(products=None, *, database=True, ai_configured=True, weights=None):
     """Run app.py against mocked services and a throwaway workspace."""
     products = synthetic_products() if products is None else products
+    weights = [] if weights is None else weights
     with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
         root = Path(directory)
         db_path = root / "synthetic.duckdb"
@@ -69,6 +78,12 @@ def synthetic_app(products=None, *, database=True, ai_configured=True):
                 pipeline_services, "retry_ai_products",
                 return_value=pipeline_services.AIRetryReport(AIEnrichmentReport("completed"), ()))),
             "run_sync": stack.enter_context(patch.object(pipeline_services, "run_sync")),
+            "read_weight_worklist": stack.enter_context(patch.object(
+                pipeline_services, "read_weight_worklist",
+                side_effect=lambda keys=None, db_path=None: [
+                    dict(p) for p in weights if keys is None or p["product_key"] in keys])),
+            "weight_batch_text": stack.enter_context(patch.object(
+                pipeline_services, "weight_batch_text", return_value="Estimate the weight...")),
         }
         test = AppTest.from_file(str(APP_PATH), default_timeout=30).run()
         yield test, mocks
@@ -319,6 +334,25 @@ class StreamlitAppTests(unittest.TestCase):
             self.assertFalse(test.session_state["artifacts_pending"])
             self.assertTrue(test.session_state["export_retry_needed"])
             self.assertIn("retry_export", [button.key for button in test.button])
+
+    def test_missing_weight_view_lists_products_and_counts_them(self):
+        with synthetic_app(weights=weight_products()) as (test, mocks):
+            labels = test.get("button_group")[0].proto.options if test.get("button_group") else []
+            self.assertTrue(any("Missing weight (1)" in option.content for option in labels))
+            test.session_state["view"] = "weights"
+            test.run()
+            self.assertFalse(test.exception)
+            self.assertTrue(any("Type the weight in grams" in item.value for item in test.markdown))
+            self.assertFalse(test.button(key="open_weight_chatbot").disabled)
+
+    def test_weight_chatbot_asks_only_for_weights(self):
+        with synthetic_app(weights=weight_products()) as (test, mocks):
+            test.session_state["view"] = "weights"
+            test.run()
+            test.button(key="open_weight_chatbot").click().run()
+            self.assertFalse(test.exception)
+            mocks["weight_batch_text"].assert_called_once()
+            self.assertEqual(mocks["weight_batch_text"].call_args.args[0], ["50980"])
 
     def test_first_run_without_database_explains_sync(self):
         with synthetic_app(database=False) as (test, mocks):

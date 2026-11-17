@@ -150,6 +150,50 @@ class TestAuditRemediation(unittest.TestCase):
         self.assertIsNone(row[3])
         self.assertTrue(row[4])
 
+    def test_litre_values_too_large_for_food_are_not_weights(self):
+        # "24l" on a cheese means 24 months, not 24 litres.
+        self.assertIsNone(sync.parse_weight_from_text("Parm. Reggiano maturat 24l"))
+        self.assertEqual(sync.parse_weight_from_text("Ulei 1L"), 1000.0)
+        self.assertEqual(sync.parse_weight_from_text("Apa minerala 5L"), 5000.0)
+        self.assertEqual(sync.parse_weight_from_text("Dressing salata 500ml"), 500.0)
+
+    def test_only_fractional_purchases_or_variable_weight_codes_count_as_weighed(self):
+        con = duckdb.connect(":memory:")
+        sync.init_database(con)
+        products = {
+            "50980": "Rulou cu mere",              # bakery PLU, always whole pieces
+            "50535": "Varza alba",                 # loose produce PLU, bought by the kilo
+            "2501007001802": "BUC_Steak de ton",   # variable weight: 180 g in the code
+            "4056489000001": "Parm. Reggiano maturat 24l",
+            "4056489000002": "Ulei 1L",
+        }
+        for key, name in products.items():
+            con.execute(
+                "INSERT INTO nutrition_cache (product_key, sample_name, is_weighed_default, package_weight_g) "
+                "VALUES (?, ?, ?, NULL)",
+                [key, name, key == "50980"],  # the old rule had flagged the bakery PLU
+            )
+        lines = [("50980", 1), ("50980", 2), ("50535", 1.238), ("50535", 1.0),
+                 ("2501007001802", 0.18), ("4056489000001", 1), ("4056489000002", 1)]
+        for index, (key, quantity) in enumerate(lines):
+            con.execute(
+                "INSERT INTO purchases (ticket_id, line_idx, name, quantity, raw_code) VALUES ('t', ?, ?, ?, ?)",
+                [index, products[key], quantity, key],
+            )
+
+        sync.compute_weights_and_quantities(con)
+
+        rows = {
+            key: (weighed, weight) for key, weighed, weight in con.execute(
+                "SELECT product_key, is_weighed_default, package_weight_g FROM nutrition_cache"
+            ).fetchall()
+        }
+        self.assertEqual(rows["50980"], (False, None))          # per piece: needs a piece weight
+        self.assertEqual(rows["50535"], (True, None))           # weighed, quantity is kg
+        self.assertEqual(rows["2501007001802"], (True, 180.0))  # weighed; the code weight is kept
+        self.assertEqual(rows["4056489000001"], (False, None))  # "24l" is not 24 kg
+        self.assertEqual(rows["4056489000002"], (False, 1000.0))
+
     def test_variable_weight_25_prefix_inheritance(self):
         """Test that weighable caseroles (25...) inherit nutrition and category via 7-digit prefix."""
         con = duckdb.connect(":memory:")
