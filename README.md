@@ -342,7 +342,9 @@ because it empties the product's nutrition (its package weight is kept).
 
 The sun/moon button switches between the light and the dark theme. The light theme
 uses `static/app-background.jpg` as its background when that file exists, and a warm
-gradient otherwise.
+gradient otherwise. The background is a softened version of a
+[photo from Unsplash](https://unsplash.com/photos/a-wooden-cutting-board-topped-with-lots-of-veggies-g_LcWlVrPbk),
+used under the [Unsplash License](https://unsplash.com/license).
 
 ---
 
