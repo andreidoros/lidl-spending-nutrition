@@ -234,6 +234,166 @@ def build_weight_batch_text(products: Iterable[Mapping[str, object]]) -> str | N
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Compact file format: one "product_key;value;value" line per product. Chatbots
+# on free accounts cut long answers; these lines cost a fraction of JSON.
+# ---------------------------------------------------------------------------
+
+COMPACT_COLUMNS = {
+    "nutrition": _PROMPT_FIELD_ORDER,
+    "weights": (PACKAGE_FIELD,),
+}
+_COMPACT_LABELS = {
+    "category": "category",
+    "kcal_100g": "kcal",
+    "proteins_100g": "protein",
+    "carbs_100g": "carbs",
+    "sugars_100g": "sugar",
+    "fat_100g": "fat",
+    "saturated_fat_100g": "sat_fat",
+    "fiber_100g": "fibre",
+    "salt_100g": "salt",
+    PACKAGE_FIELD: "weight_g",
+}
+
+
+def _compact_header(kind: str) -> str:
+    return ";".join(("product_key", *(_COMPACT_LABELS[field] for field in COMPACT_COLUMNS[kind])))
+
+
+def build_compact_request(
+    kind: str,
+    products: Iterable[Mapping[str, object]],
+    taxonomy: Taxonomy | None = None,
+) -> str | None:
+    """A file-sized chatbot request: instructions plus one line per product.
+
+    ``kind`` is "nutrition" (products carry ``fields_to_fill``) or "weights".
+    The answer is parsed by ``parse_compact_answer``.
+    """
+    lines_in = []
+    for product in products:
+        name = str(product.get("sample_name") or "").replace(";", ",")
+        line = f"{product['product_key']};{name}"
+        if kind == "nutrition":
+            fields = product.get("fields_to_fill") or ()
+            line += ";" + " ".join(_COMPACT_LABELS[field] for field in fields)
+        lines_in.append(line)
+    if not lines_in:
+        return None
+    header = _compact_header(kind)
+    if kind == "weights":
+        task = [
+            "Estimate the weight of each grocery product below, bought at Lidl Romania, from its name only.",
+            "weight_g is the weight in grams of one item as it appears on the receipt: one croissant, one pack, one bottle.",
+        ]
+        product_header = "product_key;product name"
+    else:
+        task = [
+            "Complete the missing data of each grocery product below, bought at Lidl Romania, from its name only.",
+            "The last column of each product lists the fields to fill; leave every other field empty.",
+            "Nutrition is per 100 g: kcal, then grams of protein, carbs, sugar, fat, sat_fat, fibre and salt.",
+            "weight_g is the weight in grams of one item as it appears on the receipt.",
+            "category must be one exact value from the list below; use Non-Food for anything that is not food and give it no nutrition.",
+        ]
+        product_header = "product_key;product name;fields to fill"
+    lines = [
+        *task,
+        "",
+        "Answer with one line per product, in a code block, in exactly this format:",
+        header,
+        "Use ; between values, keep product_key exactly as given, leave a value empty when you are not sure,",
+        "and write numbers without units. No other text is needed.",
+        "If the answer gets too long, stop after a complete line; you will be asked to continue.",
+    ]
+    if kind == "nutrition" and taxonomy is not None:
+        lines += ["", "Categories:", taxonomy.prompt_lines()]
+    lines += ["", "Products:", product_header, *lines_in]
+    return "\n".join(lines)
+
+
+def build_compact_chat_batch(
+    con: duckdb.DuckDBPyConnection,
+    taxonomy: Taxonomy,
+    category_to_macro: Mapping[str, str],
+) -> str | None:
+    """The review batch (incomplete products) in the compact file format."""
+    return build_compact_request("nutrition", _batch_products(con, category_to_macro), taxonomy)
+
+
+def _compact_number(text: str) -> float | None:
+    cleaned = text.strip().replace(" ", "").replace(",", ".")
+    for suffix in ("kcal", "kg", "g"):
+        if cleaned.lower().endswith(suffix):
+            cleaned = cleaned[: -len(suffix)]
+    try:
+        value = float(cleaned)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
+
+
+def parse_compact_answer(text: str, kind: str) -> tuple[dict[str, list[dict[str, object]]], int]:
+    """Read "product_key;value;..." lines into the JSON shape of a chat answer.
+
+    Explanations, code fences and header lines are ignored, decimal commas
+    are accepted and empty values mean unknown. Returns the payload and the
+    number of lines that looked like data but could not be read.
+    """
+    columns = COMPACT_COLUMNS[kind]
+    products: list[dict[str, object]] = []
+    unreadable = 0
+    for raw in text.splitlines():
+        line = raw.strip().strip("`").strip()
+        if ";" not in line and "\t" not in line:
+            continue
+        parts = [part.strip().strip('"').strip() for part in line.replace("\t", ";").split(";")]
+        key = parts[0]
+        if not key.replace("-", "").replace("_", "").isalnum() or key.lower() == "product_key":
+            continue  # prose, headers and code fences
+        values = parts[1:]
+        # The chatbot sometimes copies the product name back after the key.
+        # Only the category column holds text, so a second text column (or,
+        # for weights, any text before the number) is that copied name.
+        if kind == "weights":
+            echoed = len(values) >= 2 and _compact_number(values[0]) is None
+        else:
+            echoed = len(values) >= 2 and values[1] != "" and _compact_number(values[1]) is None
+        if echoed:
+            values = values[1:]
+        entry: dict[str, object] = {"product_key": key}
+        readable = False
+        for field, value in zip(columns, values):
+            if not value:
+                continue
+            if field == "category":
+                entry[field] = value
+                readable = True
+                continue
+            number = _compact_number(value)
+            if number is None:
+                continue
+            entry[field] = number
+            readable = True
+        if readable:
+            products.append(entry)
+        else:
+            unreadable += 1
+    return {"products": products}, unreadable
+
+
+def normalize_chat_answer(text: str, kind: str) -> tuple[str, int]:
+    """Return a JSON chat answer for either format, plus unreadable compact lines.
+
+    A JSON answer (the copy-and-paste route) is passed through unchanged.
+    """
+    stripped = text.strip()
+    if "{" in stripped and '"products"' in stripped:
+        return text, 0
+    payload, unreadable = parse_compact_answer(text, kind)
+    return json.dumps(payload, ensure_ascii=False), unreadable
+
+
 def refresh_chat_batch_file(
     con: duckdb.DuckDBPyConnection,
     taxonomy: Taxonomy,

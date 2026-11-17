@@ -340,6 +340,13 @@ The app has four views:
 - **All products** shows every product, with a search box. Edits save the same way.
 - **Settings** holds the AI mode and the Groq API key.
 
+**Use your chatbot** works with free chatbot accounts and has two routes. For a few
+products, copy the request and paste the JSON answer back. For many products, open
+*Many products: use a file*: download the `.txt`, attach it in your chatbot, write
+"Follow the instructions in this file", then paste the answer (one `product_key;value`
+line per product) or upload the file it gives you. If the answer stops halfway, write
+"continue" and paste every part. The app checks the answer before you save it.
+
 Report files (the Parquet exports Power BI reads) refresh a moment after your last
 edit; the line next to the views says when they are up to date. Refresh Power BI to
 see the changes. Choosing **Non-Food** as a category asks for confirmation first,

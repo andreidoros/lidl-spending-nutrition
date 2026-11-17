@@ -25,6 +25,7 @@ from ai_enrichment.chat_batch import (
     DEFAULT_CHAT_BATCH_PATH,
     ChatBatchPreview,
     ChatBatchSaveReport,
+    normalize_chat_answer,
     preview_chat_batch_import,
     refresh_chat_batch_file,
     save_chat_batch_import,
@@ -612,6 +613,34 @@ def weight_batch_text(
         if not product.get("package_weight_g")
     ]
     return build_weight_batch_text(products) or ""
+
+
+def compact_chat_request(
+    kind: str,
+    db_path: str | os.PathLike[str] | None = None,
+) -> str:
+    """The downloadable chatbot file: every incomplete product ("nutrition")
+    or every product still missing a weight ("weights"), one line each."""
+    from ai_enrichment.chat_batch import build_compact_chat_batch, build_compact_request
+
+    if kind == "weights":
+        return build_compact_request("weights", read_weight_worklist(None, db_path)) or ""
+    if kind != "nutrition":
+        raise ValueError(f"Unknown chatbot request kind: {kind!r}")
+    sync = _load_sync_module()
+    path = _database_path(db_path, sync)
+    if not path.is_file():
+        raise FileNotFoundError(f"Product database does not exist: {path}")
+
+    from ai_eval.taxonomy import load_taxonomy
+
+    with _exclusive_operation(path):
+        connection = duckdb.connect(str(path), read_only=True)
+        try:
+            taxonomy = load_taxonomy(sync.TAXONOMY_PATH)
+            return build_compact_chat_batch(connection, taxonomy, taxonomy.category_to_macro) or ""
+        finally:
+            connection.close()
 
 
 def read_review_products(

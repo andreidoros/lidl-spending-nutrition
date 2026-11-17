@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
@@ -84,6 +85,8 @@ def synthetic_app(products=None, *, database=True, ai_configured=True, weights=N
                     dict(p) for p in weights if keys is None or p["product_key"] in keys])),
             "weight_batch_text": stack.enter_context(patch.object(
                 pipeline_services, "weight_batch_text", return_value="Estimate the weight...")),
+            "compact_chat_request": stack.enter_context(patch.object(
+                pipeline_services, "compact_chat_request", return_value="product_key;weight_g\n50980;Rulou")),
         }
         test = AppTest.from_file(str(APP_PATH), default_timeout=30)
         test.query_params.update(query or {})
@@ -364,6 +367,30 @@ class StreamlitAppTests(unittest.TestCase):
             self.assertFalse(test.exception)
             mocks["weight_batch_text"].assert_called_once()
             self.assertEqual(mocks["weight_batch_text"].call_args.args[0], ["50980"])
+
+    def test_chatbot_file_route_reads_compact_answers_and_check_is_never_blocked(self):
+        preview = ChatBatchPreview(
+            (ChatBatchSuggestion("50980", package_weight_g=90.0),), (), ()
+        )
+        with synthetic_app(weights=weight_products()) as (test, mocks), patch.object(
+            pipeline_services, "preview_chat_import", return_value=preview
+        ) as check:
+            test.session_state["view"] = "weights"
+            test.run()
+            test.button(key="open_weight_chatbot").click().run()
+            self.assertEqual(mocks["compact_chat_request"].call_args.args[0], "weights")
+            self.assertTrue(any("Follow the instructions in this file" in item.value for item in test.markdown))
+            self.assertFalse(test.button(key="check_chat_answer").disabled)
+            # Pressed before anything is pasted: a hint, not a blocked button.
+            test.button(key="check_chat_answer").click().run()
+            self.assertTrue(any("Paste the chatbot's answer" in item.value for item in test.warning))
+            check.assert_not_called()
+            test.text_area(key="chat_answer").input("Here you go:\n50980;Rulou cu mere;90").run()
+            test.button(key="check_chat_answer").click().run()
+            self.assertFalse(test.exception)
+            sent = check.call_args.args[0]
+            self.assertEqual(json.loads(sent), {"products": [{"product_key": "50980", "package_weight_g": 90.0}]})
+            self.assertIn("Save 1 suggested value", [button.label for button in test.button])
 
     def test_first_run_without_database_explains_sync(self):
         with synthetic_app(database=False) as (test, mocks):

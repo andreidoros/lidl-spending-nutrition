@@ -16,6 +16,9 @@ if str(ROOT) not in sys.path:
 
 from ai_enrichment.chat_batch import (
     build_chat_batch_text,
+    build_compact_request,
+    normalize_chat_answer,
+    parse_compact_answer,
     preview_chat_batch_import,
     refresh_chat_batch_file,
     save_chat_batch_import,
@@ -548,6 +551,69 @@ class ChatBatchTests(unittest.TestCase):
             self.assertEqual(con.execute("SELECT COUNT(*) FROM ai_enrichment_state").fetchone()[0], 0)
         finally:
             con.close()
+
+
+class CompactChatFormatTests(unittest.TestCase):
+    """The file route: one "product_key;value" line per product."""
+
+    def test_weight_answer_survives_prose_fences_headers_and_decimal_commas(self):
+        answer = """Sure! Here are the estimates:
+```
+product_key;weight_g
+50980;90
+4056489000001;Carne tocata;500 g
+4056489000002;0,75 kg
+4056489000003;
+4056489000004;about two hundred
+```
+Let me know if you need more."""
+        payload, unreadable = parse_compact_answer(answer, "weights")
+        self.assertEqual(payload["products"], [
+            {"product_key": "50980", "package_weight_g": 90.0},
+            {"product_key": "4056489000001", "package_weight_g": 500.0},
+            {"product_key": "4056489000002", "package_weight_g": 0.75},
+        ])
+        # "4056489000003;" is an honest "unknown"; only the prose value is unreadable.
+        self.assertEqual(unreadable, 2)
+
+    def test_nutrition_answer_maps_columns_by_position(self):
+        answer = "\n".join([
+            "product_key;category;kcal;protein;carbs;sugar;fat;sat_fat;fibre;salt;weight_g",
+            "000123;Dairy & Eggs;64;3,3;4,7;4,7;3,5;2,3;0;0,1;1000",
+            "000456;;;;;;;;;0,8;",
+            "000789;Lapte;Dairy & Eggs;64;;;;;;;;",
+        ])
+        payload, unreadable = parse_compact_answer(answer, "nutrition")
+        first, second, third = payload["products"]
+        self.assertEqual(first["category"], "Dairy & Eggs")
+        self.assertEqual(first["proteins_100g"], 3.3)
+        self.assertEqual(first["fiber_100g"], 0.0)
+        self.assertEqual(first["package_weight_g"], 1000.0)
+        self.assertEqual(second, {"product_key": "000456", "salt_100g": 0.8})
+        self.assertEqual(third, {"product_key": "000789", "category": "Dairy & Eggs", "kcal_100g": 64.0})
+        self.assertEqual(unreadable, 0)
+
+    def test_json_answers_pass_through_and_compact_answers_become_json(self):
+        text = '{"products": [{"product_key": "1", "package_weight_g": 5}]}'
+        self.assertEqual(normalize_chat_answer(text, "weights"), (text, 0))
+        converted, unreadable = normalize_chat_answer("1;5", "weights")
+        self.assertEqual(json.loads(converted), {"products": [{"product_key": "1", "package_weight_g": 5.0}]})
+        self.assertEqual(unreadable, 0)
+
+    def test_requests_list_every_product_on_one_line(self):
+        weights = build_compact_request("weights", [
+            {"product_key": "50980", "sample_name": "Rulou; cu mere"},
+            {"product_key": "4056489000001", "sample_name": "Carne tocata"},
+        ])
+        self.assertIn("product_key;weight_g", weights)
+        self.assertIn("50980;Rulou, cu mere", weights)
+        self.assertIn("4056489000001;Carne tocata", weights)
+        nutrition = build_compact_request("nutrition", [
+            {"product_key": "000123", "sample_name": "Lapte", "fields_to_fill": ("kcal_100g", "salt_100g")},
+        ])
+        self.assertIn("product_key;category;kcal;protein;carbs;sugar;fat;sat_fat;fibre;salt;weight_g", nutrition)
+        self.assertIn("000123;Lapte;kcal salt", nutrition)
+        self.assertIsNone(build_compact_request("weights", []))
 
 
 if __name__ == "__main__":

@@ -936,6 +936,34 @@ class PipelineServicesTests(unittest.TestCase):
         ).fetchone()[0], 90.0)
         check.close()
 
+    def test_compact_files_cover_every_product_and_their_answers_save(self):
+        self._create_weight_db()
+        weights = pipeline_services.compact_chat_request("weights", self.db_path)
+        self.assertIn("50980;Rulou cu mere", weights)
+        self.assertIn("4056489000001;Carne tocata", weights)
+        self.assertNotIn("50535", weights)  # weighed produce needs no weight
+
+        con = duckdb.connect(str(self.db_path))
+        con.execute("UPDATE nutrition_cache SET salt_100g = NULL WHERE product_key = '000123'")
+        con.close()
+        nutrition = pipeline_services.compact_chat_request("nutrition", self.db_path)
+        self.assertIn("000123;Synthetic milk;salt", nutrition)
+        self.assertIn("Categories:", nutrition)
+
+        answer, unreadable = pipeline_services.normalize_chat_answer(
+            "```\n50980;Rulou cu mere;90\n4056489000001;500\n```", "weights"
+        )
+        self.assertEqual(unreadable, 0)
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sync, "REVIEW_QUEUE_PATH", self.root / "review.csv"))
+            stack.enter_context(patch.object(sync, "export_views_for_bi", side_effect=lambda _con: None))
+            report = pipeline_services.save_review_session(
+                manual_edits={}, baselines={}, response_text=answer,
+                db_path=self.db_path, output_path=self.root / "ai_chat_batch.txt",
+            )
+        self.assertEqual(report.chat_import.fields_saved, 2)
+        self.assertEqual(pipeline_services.read_weight_worklist(None, self.db_path), [])
+
     def test_read_products_returns_all_or_chosen_products_with_provenance(self):
         self._create_chat_import_db()
         con = duckdb.connect(str(self.db_path))

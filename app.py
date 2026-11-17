@@ -83,6 +83,10 @@ COMPLETE_STATUS = "Complete"
 VIEWS = ("todo", "weights", "all", "settings")
 EXPORT_DELAY_SECONDS = 1.5
 UNDO_LIMIT = 20
+CHATBOT_FILE_STEPS = """1. Download the file and attach it in your chatbot (free accounts work).
+2. Write: *Follow the instructions in this file.*
+3. If the answer stops halfway, write *continue*. Paste every part below, or upload the file it gives you.
+"""
 # One chatbot answer can hold about this many weights; the request takes the
 # products with the most money spent first, the next request the following ones.
 WEIGHT_BATCH_SIZE = 100
@@ -183,6 +187,14 @@ function mark() {
     document.documentElement.dataset.lidlTheme = mode;
   }
   return mode;
+}
+
+// The app has its own light and dark theme; this tells the Dark Reader
+// extension not to darken it a second time (that turned the photo brown).
+if (!document.querySelector('meta[name="darkreader-lock"]')) {
+  const lock = document.createElement("meta");
+  lock.name = "darkreader-lock";
+  document.head.appendChild(lock);
 }
 
 export default function (component) {
@@ -852,6 +864,9 @@ def _open_dialog(name: str, keys: list[str], names: Mapping[str, Any]) -> None:
     st.session_state.dialog = {"name": name, "keys": list(keys), "names": dict(names)}
     if name in {"chatbot", "chatbot_weights"}:
         st.session_state.chat_prompt = None
+        st.session_state.chat_file_request = None
+        st.session_state.chat_preview_source = None
+        st.session_state.chat_upload_version = st.session_state.get("chat_upload_version", 0) + 1
         st.session_state.chat_preview = None
         st.session_state.chat_preview_response = None
 
@@ -956,25 +971,59 @@ def _chatbot_dialog(names: Mapping[str, Any], weight_keys: list[str] | None = No
     if not state.chat_prompt:
         st.info("Nothing to ask right now: no product has empty fields a chatbot can fill.")
         return
-    st.markdown("**1. Copy this request into your chatbot** (ChatGPT, Claude, Gemini…)")
-    st.caption("Use the copy icon in the top-right corner of the box. No API key needed.")
-    st.code(state.chat_prompt, language=None, height=180, wrap_lines=True)
-    st.markdown("**2. Paste its answer here**")
+    kind = "weights" if weight_keys is not None else "nutrition"
+    st.markdown("**1. Give your chatbot the request** (ChatGPT, Claude, Gemini…). No API key needed.")
+    copy_tab, file_tab = st.tabs(["Copy and paste", "Many products: use a file"])
+    with copy_tab:
+        hint = " It covers the 100 products you spent most on." if kind == "weights" else ""
+        st.caption("Use the copy icon in the top-right corner of the box." + hint)
+        st.code(state.chat_prompt, language=None, height=180, wrap_lines=True)
+    with file_tab:
+        st.markdown(CHATBOT_FILE_STEPS)
+        if state.get("chat_file_request") is None:
+            try:
+                state.chat_file_request = pipeline_services.compact_chat_request(kind, DB_PATH)
+            except Exception as exc:  # noqa: BLE001
+                state.chat_file_request = ""
+                st.error(f"Could not prepare the file ({type(exc).__name__}).")
+        st.download_button(
+            "Download for chatbot (.txt)", data=state.chat_file_request or "",
+            file_name=f"lidl-{kind}-for-chatbot.txt", mime="text/plain",
+            icon=":material/download:", key="download_chat_file", disabled=not state.chat_file_request,
+            on_click="ignore",
+        )
+    st.markdown("**2. Paste its answer, or upload the file it gives you**")
     answer = st.text_area(
         "Chatbot answer", key="chat_answer", height=140, label_visibility="collapsed",
-        placeholder='Paste the JSON answer, for example {"products": [...]}',
+        placeholder='Paste the whole answer: JSON, or lines like 4056489123456;250',
     )
-    if st.button("Check answer", key="check_chat_answer", icon=":material/fact_check:",
-                 disabled=not answer.strip()):
-        try:
-            state.chat_preview = pipeline_services.preview_chat_import(answer, DB_PATH)
-            state.chat_preview_response = answer
-        except Exception as exc:  # noqa: BLE001
-            state.chat_preview = None
-            st.error(f"Could not read this answer ({type(exc).__name__}). Paste the whole JSON answer.")
-    preview = state.chat_preview if state.chat_preview_response == answer and answer.strip() else None
+    upload = st.file_uploader(
+        "Answer file", type=["txt", "csv"], label_visibility="collapsed",
+        key=f"chat_answer_file_{state.get('chat_upload_version', 0)}",
+    )
+    source = upload.getvalue().decode("utf-8", errors="replace") if upload is not None else answer
+    # Never disabled: a pasted answer reaches the app only when the box loses
+    # focus, which is the same click that presses this button.
+    if st.button("Check answer", key="check_chat_answer", icon=":material/fact_check:"):
+        if not source.strip():
+            st.warning("Paste the chatbot's answer or upload its file first.")
+        else:
+            try:
+                normalized, unreadable = pipeline_services.normalize_chat_answer(source, kind)
+                state.chat_preview = pipeline_services.preview_chat_import(normalized, DB_PATH)
+                state.chat_preview_response = normalized
+                state.chat_preview_source = source
+                state.chat_unreadable = unreadable
+            except Exception as exc:  # noqa: BLE001
+                state.chat_preview = None
+                st.error(f"Could not read this answer ({type(exc).__name__}). Paste the whole answer.")
+    current = state.get("chat_preview_source") == source and source.strip()
+    preview = state.chat_preview if current else None
     if preview is None:
         return
+    answer = state.chat_preview_response
+    if state.get("chat_unreadable"):
+        st.caption(f"{state.chat_unreadable} line(s) of the answer could not be read and were left out.")
     st.markdown("**3. Check the values and save**")
     if preview.suggestions:
         st.dataframe(_suggestion_rows(preview, names), hide_index=True, width="stretch")
