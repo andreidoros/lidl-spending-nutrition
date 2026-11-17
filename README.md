@@ -326,6 +326,15 @@ and are already ignored.
 
 ## Using the app
 
+<p align="center">
+  <img src="docs/images/app-to-complete.png" width="49%" alt="To complete: incomplete products in an autosaving table">
+  <img src="docs/images/app-missing-weight.png" width="49%" alt="Missing weight: bought food without a weight, most money spent first">
+</p>
+<p align="center">
+  <img src="docs/images/app-chatbot-file.png" width="49%" alt="Use your chatbot: the file route for many products">
+  <img src="docs/images/app-all-products-dark.png" width="49%" alt="All products with search, in the dark theme">
+</p>
+
 The app has four views:
 
 - **To complete** lists the products that still miss a category or nutrition values.
