@@ -136,7 +136,7 @@ data/raw_tickets/        raw receipt JSON files
 - Windows for the one-click `run.bat` launcher (the app itself is cross-platform)
 - A **Lidl Plus account** in a supported country (`ro`, `de`, `fr`, `es`, `it`, `pl`, …)
 - Internet access for the first login and for synchronization
-- **Power BI Desktop** to open and edit the report (optional, but needed for the dashboard)
+- **Power BI Desktop** to open and edit the report
 
 ---
 
