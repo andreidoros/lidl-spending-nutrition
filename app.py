@@ -1,11 +1,19 @@
-"""Local Streamlit control panel for the Lidl product pipeline."""
+"""Local Streamlit control panel for the Lidl product pipeline.
+
+Three views share one header: *To complete* (incomplete products), *All
+products* (search and edit anything) and *Settings*. Every table cell saves
+itself when the user leaves it; report files follow a moment later, once the
+user pauses, so typing is never slowed by a Parquet export.
+"""
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import os
-import html
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import pandas as pd
 import streamlit as st
@@ -19,51 +27,14 @@ from app_settings import (
     load_public_ai_settings,
     save_ai_settings,
 )
-from product_store import (
-    missing_required_fields,
-    review_status_text,
-)
+from product_store import missing_required_fields, review_status_text
 
 APP_TITLE = "Lidl Spending & Nutrition"
 APP_FOOTER = "Independent project. Not affiliated with Lidl."
-
-# Only the rules the native theme cannot express. Colours, radius, fonts and
-# widget chrome stay in .streamlit/config.toml. No remote font import: the app
-# promises that data stays on this computer, so it must not call Google Fonts.
-_STYLE = """
-<style>
-.block-container {
-    max-width: 1050px;
-    padding-top: 2rem;
-    padding-bottom: 2rem;
-}
-
-h1, h2, h3, h4 {
-    letter-spacing: -0.02em;
-}
-
-textarea {
-    font-family: "JetBrains Mono", Consolas, "Courier New", monospace !important;
-    font-size: 0.85rem !important;
-    background-color: #090D16 !important;
-}
-
-.incomplete-badge {
-    display: inline-block;
-    background-color: rgba(217, 119, 6, 0.18);
-    color: #FACC15;
-    border: 1px solid #D97706;
-    border-radius: 4px;
-    padding: 3px 10px;
-    font-family: "JetBrains Mono", Consolas, monospace;
-    font-size: 0.75rem;
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    white-space: nowrap;
-}
-</style>
-"""
+PRIVACY_NOTE = (
+    "AI completion sends only product names, codes, and package weight. "
+    "Receipts, prices, and purchase history stay on this computer."
+)
 TABLE_COLUMNS = (
     "sample_name",
     "macro_category",
@@ -79,6 +50,8 @@ TABLE_COLUMNS = (
     "salt_100g",
 )
 NUMERIC_COLUMNS = TABLE_COLUMNS[3:]
+NUTRIENT_COLUMNS = TABLE_COLUMNS[4:]
+EDITABLE_COLUMNS = TABLE_COLUMNS[2:]
 REVIEW_TABLE_COLUMNS = ("review_status",) + TABLE_COLUMNS
 FIELD_LABELS = {
     "sample_name": "Product",
@@ -94,28 +67,186 @@ FIELD_LABELS = {
     "fiber_100g": "Fibre / 100 g",
     "salt_100g": "Salt / 100 g",
 }
+# Short table headers; the full label is the column tooltip.
+COLUMN_TITLES = {
+    "package_weight_g": "Weight (g)",
+    "kcal_100g": "kcal",
+    "proteins_100g": "Protein",
+    "carbs_100g": "Carbs",
+    "sugars_100g": "Sugar",
+    "fat_100g": "Fat",
+    "saturated_fat_100g": "Sat. fat",
+    "fiber_100g": "Fibre",
+    "salt_100g": "Salt",
+}
+COMPLETE_STATUS = "Complete"
+VIEWS = ("todo", "all", "settings")
+EXPORT_DELAY_SECONDS = 1.5
+UNDO_LIMIT = 20
+
 DB_PATH = Path(os.environ.get("LIDL_APP_DB_PATH", "lidl_consumption.duckdb"))
 CHAT_BATCH_PATH = Path(os.environ.get("LIDL_APP_CHAT_BATCH_PATH", "ai_chat_batch.txt"))
 ENV_PATH = Path(os.environ.get("LIDL_APP_ENV_PATH", DEFAULT_ENV_PATH))
+# The report's background photo. It is optional: without it, light mode uses
+# the report's warm gradient instead.
+BACKGROUND_PATH = Path(__file__).resolve().parent / "static" / "app-background.jpg"
+BACKGROUND_URL = "app/static/app-background.jpg"
+GRADIENT = "linear-gradient(135deg, #F2C29B 0%, #FAEBDA 38%, #FBF5EC 55%, #D3DFC3 100%)"
 
 
-def _empty_review_state() -> None:
-    st.session_state.setdefault("review_open", False)
-    st.session_state.setdefault("review_base", None)
-    st.session_state.setdefault("review_manual", {})
-    st.session_state.setdefault("review_suggestions", {})
-    st.session_state.setdefault("chat_response_input", "")
-    st.session_state.setdefault("chat_preview", None)
-    st.session_state.setdefault("chat_preview_response", None)
-    st.session_state.setdefault("last_sync_complete", False)
-    st.session_state.setdefault("last_sync_review_count", None)
-    st.session_state.setdefault("last_operation_message", "")
-    st.session_state.setdefault("review_initial_keys", None)
-    st.session_state.setdefault("groq_summary", None)
-    st.session_state.setdefault("review_notices", [])
-    st.session_state.setdefault("product_base", None)
-    st.session_state.setdefault("product_edits", {})
-    st.session_state.setdefault("product_search_results", [])
+# --------------------------------------------------------------------------
+# Look and feel
+# --------------------------------------------------------------------------
+
+def _style(photo: bool) -> str:
+    """Rules the theme cannot express. Dark mode keys off the data-lidl-theme
+    attribute that the theme toggle keeps in sync with Streamlit's theme."""
+    light_background = (
+        f'url("{BACKGROUND_URL}") center / cover fixed no-repeat, #E9DCC6'
+        if photo else f"{GRADIENT} fixed"
+    )
+    title_on_photo = (
+        "html:not([data-lidl-theme='dark']) .st-key-masthead h1 {"
+        " color: #FBF5EC !important; text-shadow: 0 1px 3px rgba(50,32,16,.55); }"
+        if photo else ""
+    )
+    return f"""<style>
+.block-container {{ max-width: 1440px; padding-top: 1.4rem; padding-bottom: 2rem; }}
+[data-testid="stHeader"] {{ background: transparent; }}
+/* The empty header bar lies over the masthead buttons; let clicks through
+   everywhere except its own buttons (the main menu). */
+[data-testid="stHeader"], [data-testid="stToolbar"] {{ pointer-events: none; }}
+[data-testid="stHeader"] button, [data-testid="stMainMenu"] {{ pointer-events: auto; }}
+/* Streamlit's "Running… Stop" badge would sit on the Sync button; progress
+   is shown in the panel instead. */
+[data-testid="stStatusWidget"] {{ visibility: hidden; }}
+.stApp {{ background: {light_background}; }}
+html[data-lidl-theme="dark"] .stApp {{ background: #1F2118; }}
+h1, h2, h3 {{ letter-spacing: -0.02em; }}
+{title_on_photo}
+.st-key-panel {{ background: rgba(255,255,255,.93); border-radius: 14px; padding: 20px 24px;
+    box-shadow: 0 6px 22px rgba(62,42,24,.22); }}
+html[data-lidl-theme="dark"] .st-key-panel {{ background: rgba(43,46,33,.96);
+    box-shadow: 0 6px 22px rgba(0,0,0,.35); }}
+.st-key-statusline, .st-key-footer {{ background: rgba(255,255,255,.78); border-radius: 10px;
+    padding: 6px 12px; backdrop-filter: blur(6px); flex: none !important; }}
+html[data-lidl-theme="dark"] .st-key-statusline, html[data-lidl-theme="dark"] .st-key-footer {{
+    background: rgba(43,46,33,.85); }}
+.st-key-views [data-testid="stButtonGroup"] button {{ background: rgba(255,255,255,.80);
+    backdrop-filter: blur(6px); }}
+html[data-lidl-theme="dark"] .st-key-views [data-testid="stButtonGroup"] button {{
+    background: rgba(43,46,33,.88); }}
+[data-testid="stButtonGroup"] button[aria-checked="true"] {{ background: #5F6B3A !important; }}
+[data-testid="stButtonGroup"] button[aria-checked="true"] * {{ color: #FFFFFF !important; }}
+html[data-lidl-theme="dark"] [data-testid="stButtonGroup"] button[aria-checked="true"] {{
+    background: #9DAE6A !important; }}
+html[data-lidl-theme="dark"] [data-testid="stButtonGroup"] button[aria-checked="true"] * {{
+    color: #1F2118 !important; }}
+textarea {{ font-family: Consolas, "Courier New", monospace !important; font-size: .85rem !important; }}
+</style>"""
+
+
+_SUN = (
+    "<svg viewBox='0 0 24 24' width='20' height='20' fill='none' stroke='currentColor' "
+    "stroke-width='2' stroke-linecap='round'><circle cx='12' cy='12' r='4.2'/>"
+    "<path d='M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6"
+    "M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6'/></svg>"
+)
+_MOON = (
+    "<svg viewBox='0 0 24 24' width='20' height='20' fill='none' stroke='currentColor' "
+    "stroke-width='2' stroke-linejoin='round'><path d='M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5 "
+    "8.5 8.5 0 1 0 20.5 14.2z'/></svg>"
+)
+_THEME_TOGGLE_JS = """
+const SUN = %SUN%;
+const MOON = %MOON%;
+// Streamlit remembers the chosen theme under this key (Settings > Theme).
+const KEY = `stActiveTheme-${window.location.pathname}-v2`;
+
+function currentMode() {
+  const app = document.querySelector(".stApp");
+  if (!app) return "light";
+  const rgb = (getComputedStyle(app).color.match(/[0-9.]+/g) || [0, 0, 0]).map(Number);
+  const luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255;
+  return luminance > 0.5 ? "dark" : "light";
+}
+
+function mark() {
+  const mode = currentMode();
+  if (document.documentElement.dataset.lidlTheme !== mode) {
+    document.documentElement.dataset.lidlTheme = mode;
+  }
+  return mode;
+}
+
+export default function (component) {
+  const { parentElement } = component;
+  const button = parentElement.querySelector("button");
+  if (!button) return;
+  const paint = () => {
+    const mode = mark();
+    if (button.dataset.mode === mode) return;
+    button.dataset.mode = mode;
+    const dark = mode === "dark";
+    button.innerHTML = dark ? SUN : MOON;
+    const label = dark ? "Switch to light mode" : "Switch to dark mode";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+  };
+  paint();
+  // The menu can change the theme too; keep the page background in step.
+  const timer = setInterval(paint, 300);
+  button.onclick = () => {
+    const next = currentMode() === "dark" ? "Light" : "Dark";
+    try { window.localStorage.setItem(KEY, JSON.stringify(next)); } catch (error) {}
+    window.location.reload();
+  };
+  return () => clearInterval(timer);
+}
+""".replace("%SUN%", repr(_SUN)).replace("%MOON%", repr(_MOON))
+_THEME_TOGGLE_CSS = """
+button {
+  width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--st-button-radius); border: 1px solid var(--st-border-color);
+  background: color-mix(in srgb, var(--st-background-color) 80%, transparent);
+  color: var(--st-text-color); cursor: pointer; backdrop-filter: blur(6px);
+}
+button:hover { border-color: var(--st-primary-color); color: var(--st-primary-color); }
+"""
+_theme_toggle = st.components.v2.component(
+    "lidl_theme_toggle",
+    html="<button type='button' aria-label='Switch theme'></button>",
+    css=_THEME_TOGGLE_CSS,
+    js=_THEME_TOGGLE_JS,
+)
+
+
+# --------------------------------------------------------------------------
+# Session state
+# --------------------------------------------------------------------------
+
+def _init_state() -> None:
+    defaults: dict[str, Any] = {
+        "notice": None,               # (level, text) shown above the table
+        "undo_stack": [],             # last saved cell edits, newest last
+        "todo_keys": None,            # rows of "To complete", fixed per visit
+        "products_cache": None,       # all products, dropped after each save
+        "editor_versions": {},        # bumped to reset a table to DB values
+        "editor_context": {},         # what each table last showed
+        "editor_seen": {},            # edits each table already handled
+        "pending_non_food": None,     # category change waiting for confirmation
+        "dialog": None,               # the open Groq or chatbot dialog
+        "artifacts_pending": False,   # report files lag behind the DB
+        "last_edit_at": 0.0,
+        "export_retry_needed": False,
+        "sync_running": False,
+        "toast": None,
+        "chat_prompt": None,
+        "chat_preview": None,
+        "chat_preview_response": None,
+    }
+    for name, value in defaults.items():
+        st.session_state.setdefault(name, copy.deepcopy(value))
 
 
 def _blank(value: Any) -> Any:
@@ -131,159 +262,463 @@ def _blank(value: Any) -> Any:
     return value
 
 
-def _has_review_draft() -> bool:
-    return bool(
-        st.session_state.review_manual
-        or st.session_state.review_suggestions
-        or st.session_state.chat_response_input.strip()
-    )
+def _cell_value(field: str, value: Any) -> Any:
+    """Normalise an editor value: blank is unknown, numbers are floats."""
+    value = _blank(value)
+    if value is None or field not in NUMERIC_COLUMNS:
+        return value
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return value
 
 
-def _has_unsaved_review() -> bool:
-    return _has_review_draft() or bool(st.session_state.product_edits)
+def _format_value(field: str, value: Any) -> str:
+    if value is None:
+        return "empty"
+    if field in NUMERIC_COLUMNS:
+        number = float(value)
+        text = f"{number:.4g}"
+        return f"{text} g" if field == "package_weight_g" else text
+    return str(value)
 
 
-def _capture_product_edits() -> None:
-    """Widget callback runs before Sync/Groq guards, including simultaneous clicks."""
-    baseline = st.session_state.product_base
-    if baseline is None:
-        return
-    delta = st.session_state.get("product_editor", {}).get("edited_rows", {}).get(0, {})
-    edits = {
-        field: _blank(value) for field, value in delta.items()
-        if field in TABLE_COLUMNS[2:] and field != "macro_category"
-        and _blank(value) != _blank(baseline.get(field))
-    }
-    st.session_state.product_edits = edits
+def _short_label(field: str) -> str:
+    return FIELD_LABELS[field].replace(" / 100 g", "").replace(" (g)", "")
 
 
-def _invalidate_product_snapshot() -> None:
-    st.session_state.product_base = None
-    st.session_state["clear_product_editor_next_run"] = True
+def _set_notice(level: str, text: str) -> None:
+    st.session_state.notice = (level, text)
 
 
-def _chat_preview_is_current() -> bool:
-    response = st.session_state.chat_response_input
-    return bool(
-        response.strip()
-        and st.session_state.chat_preview is not None
-        and st.session_state.chat_preview_response == response
-    )
+def _reset_table(view: str) -> None:
+    """Show DB values again: a new editor key drops the editor's own edits."""
+    versions = st.session_state.editor_versions
+    versions[view] = versions.get(view, 0) + 1
 
 
-def _read_review(*, force: bool = False) -> None:
-    if st.session_state.review_base is not None and not force:
-        return
-    products = pipeline_services.read_review_products(DB_PATH)
-    # Keep DB values separate from UI-only suggestions and manual cell edits.
-    st.session_state.review_base = {
-        str(product["product_key"]): dict(product) for product in products
-    }
-    if st.session_state.review_initial_keys is None:
-        st.session_state.review_initial_keys = tuple(st.session_state.review_base)
-    st.session_state.review_manual = {}
-    st.session_state.review_suggestions = {}
-    st.session_state.chat_preview = None
-    st.session_state.chat_preview_response = None
+def _data_changed() -> None:
+    st.session_state.products_cache = None
 
 
-def _display_rows() -> pd.DataFrame:
-    base = st.session_state.review_base or {}
-    suggestions = st.session_state.review_suggestions
-    manual = st.session_state.review_manual
-    sync = pipeline_services._load_sync_module()
-    taxonomy = load_taxonomy(sync.TAXONOMY_PATH)
-    rows: list[dict[str, Any]] = []
-    keys: list[str] = []
-    for key, product in base.items():
-        row = {column: product.get(column) for column in TABLE_COLUMNS}
-        active_suggestions = suggestions if _chat_preview_is_current() else {}
-        for field_name, value in active_suggestions.get(key, {}).items():
-            if field_name in row and field_name not in manual.get(key, {}):
-                row[field_name] = value
-        for field_name, value in manual.get(key, {}).items():
-            if field_name in row:
-                row[field_name] = value
-        category = _blank(row.get("category"))
-        if category == "Non-Food":
-            for field in NUMERIC_COLUMNS[1:]:
-                if field not in manual.get(key, {}):
-                    row[field] = None
-        row["macro_category"] = taxonomy.category_to_macro.get(category) or ""
-        row["review_status"] = review_status_text(product)
-        rows.append(row)
-        keys.append(key)
-    frame = pd.DataFrame(rows, columns=REVIEW_TABLE_COLUMNS, index=pd.Index(keys, name="product_key"))
-    for column in NUMERIC_COLUMNS:
-        if column in frame:
-            frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    return frame
+def _mark_artifacts_pending() -> None:
+    st.session_state.artifacts_pending = True
+    st.session_state.last_edit_at = time.time()
 
 
-def _capture_editor_changes(edited: pd.DataFrame, rendered: pd.DataFrame) -> None:
-    manual = st.session_state.review_manual
-    base = st.session_state.review_base or {}
-    for key in edited.index:
-        product_key = str(key)
-        if product_key not in base:
+def _go_to(view: str) -> None:
+    st.session_state.dialog = None
+    st.session_state.view = view
+    _on_view_change()
+
+
+def _on_view_change() -> None:
+    # A new visit to "To complete" lists what is incomplete now; products
+    # completed during the last visit drop out only at this point.
+    st.session_state.todo_keys = None
+    st.session_state.notice = None
+
+
+# --------------------------------------------------------------------------
+# Data
+# --------------------------------------------------------------------------
+
+def _taxonomy():
+    return load_taxonomy(pipeline_services._load_sync_module().TAXONOMY_PATH)
+
+
+def _all_products() -> list[dict[str, Any]]:
+    if st.session_state.products_cache is None:
+        st.session_state.products_cache = pipeline_services.read_products(None, DB_PATH)
+    return st.session_state.products_cache
+
+
+def _todo_products() -> list[dict[str, Any]]:
+    if st.session_state.todo_keys is None:
+        st.session_state.todo_keys = [
+            str(product["product_key"])
+            for product in pipeline_services.read_review_products(DB_PATH)
+        ]
+    return pipeline_services.read_products(st.session_state.todo_keys, DB_PATH)
+
+
+def _status(product: Mapping[str, Any], category_to_macro: Mapping[str, str]) -> str:
+    if missing_required_fields(product, category_to_macro):
+        return review_status_text(product)
+    return COMPLETE_STATUS
+
+
+def cell_changes(
+    edited_rows: Mapping[Any, Mapping[str, Any]],
+    seen_rows: Mapping[Any, Mapping[str, Any]],
+    keys: list[str],
+    shown: Mapping[str, Mapping[str, Any]],
+) -> list[tuple[str, str, Any, Any]]:
+    """New cell edits as (product_key, field, value before, value after).
+
+    ``edited_rows`` is the editor's cumulative edit state and ``seen_rows``
+    the part already handled. "Before" is what the cell showed before this
+    edit: the user's earlier edit if there was one, otherwise the DB value.
+    """
+    changes: list[tuple[str, str, Any, Any]] = []
+    for row, fields in edited_rows.items():
+        index = int(row)
+        if index >= len(keys):
             continue
-        for column in TABLE_COLUMNS:
-            if column in {"sample_name", "macro_category"}:
+        key = keys[index]
+        old = seen_rows.get(row, seen_rows.get(index, {})) or {}
+        for field, value in fields.items():
+            if field not in EDITABLE_COLUMNS:
                 continue
-            before = _blank(rendered.at[key, column])
-            after = _blank(edited.at[key, column])
-            if before != after:
-                manual.setdefault(product_key, {})[column] = after
+            after = _cell_value(field, value)
+            if field in old:
+                before = _cell_value(field, old[field])
+            else:
+                before = _cell_value(field, shown.get(key, {}).get(field))
+            if before == after:
+                continue
+            changes.append((key, field, before, after))
+    return changes
 
 
-def _manual_edits_for_save() -> dict[str, dict[str, Any]]:
-    edits: dict[str, dict[str, Any]] = {}
-    for key, fields in st.session_state.review_manual.items():
-        if fields:
-            edits[key] = {field: _blank(value) for field, value in fields.items()}
-    return edits
+# --------------------------------------------------------------------------
+# Saving
+# --------------------------------------------------------------------------
+
+def _save_fields(
+    key: str,
+    fields: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+) -> pipeline_services.ReviewSaveReport:
+    """Save one product's fields now; report files follow after a pause."""
+    report = pipeline_services.save_review_session(
+        manual_edits={key: dict(fields)},
+        baselines={key: dict(baseline)},
+        db_path=DB_PATH,
+        output_path=CHAT_BATCH_PATH,
+        refresh_artifacts=False,
+    )
+    if report.manual_fields_saved:
+        _mark_artifacts_pending()
+        _data_changed()
+    return report
 
 
-def _baseline_values() -> dict[str, dict[str, Any]]:
-    result: dict[str, dict[str, Any]] = {}
-    for key, product in (st.session_state.review_base or {}).items():
-        result[key] = {column: product.get(column) for column in TABLE_COLUMNS}
-        result[key]["__field_metadata__"] = product.get("field_metadata", {})
-    return result
+def _apply_edit(view: str, key: str, name: str, fields: dict[str, Any],
+                before: dict[str, Any], baseline: dict[str, Any]) -> bool:
+    """Save an edit and report it. Returns False when the table must reset."""
+    try:
+        report = _save_fields(key, fields, baseline)
+    except pipeline_services.PipelineBusyError:
+        _set_notice("warning", "Not saved: Sync or Groq is still running. Try again when it finishes.")
+        return False
+    except Exception as exc:  # noqa: BLE001 - shown to the user, value kept in DB
+        _set_notice("error", f"Not saved ({type(exc).__name__}). The table shows the stored values again.")
+        return False
+    if report.database_error:
+        _set_notice("error", "Not saved. The table shows the stored values again.")
+        return False
+    if report.conflicts:
+        labels = ", ".join(FIELD_LABELS.get(field, field) for _, field in report.conflicts)
+        _set_notice(
+            "warning",
+            f"{name}: {labels} changed somewhere else in the meantime. "
+            "The table now shows the latest value; type yours again if it is still right.",
+        )
+        return False
+    changed = ", ".join(
+        f"{_short_label(field)} {_format_value(field, value)}"
+        for field, value in fields.items()
+    )
+    _set_notice("success", f"Saved: {name} · {changed}")
+    st.session_state.toast = "Saved"
+    stack = st.session_state.undo_stack
+    stack.append({"view": view, "key": key, "name": name, "before": before, "after": fields})
+    del stack[:-UNDO_LIMIT]
+    return True
 
 
-def _conflict_message(conflicts, products) -> str:
-    details = []
-    for key, field in conflicts:
-        name = products.get(key, {}).get("sample_name") or key
-        details.append(f"{name} [{key}]: {FIELD_LABELS.get(field, field)}")
-    return (
-        "These fields changed after you opened them, so they were not saved. "
-        "Your edits are still here. Copy them before discarding changes and reopening the product to load the latest values.\n\n"
-        + "\n\n".join(details)
+def _on_table_edit(editor_key: str) -> None:
+    """Runs as soon as a cell is left. Must not call Streamlit elements before
+    ``editor_seen`` is updated, so an interrupted run cannot save twice."""
+    context = st.session_state.editor_context.get(editor_key)
+    widget = st.session_state.get(editor_key) or {}
+    edited = copy.deepcopy(dict(widget.get("edited_rows", {})))
+    if context is None:
+        return
+    seen = st.session_state.editor_seen.get(editor_key, {})
+    changes = cell_changes(edited, seen, context["keys"], context["shown"])
+    st.session_state.editor_seen[editor_key] = edited
+    if not changes:
+        return
+    view = context["view"]
+    by_product: dict[str, dict[str, tuple[Any, Any]]] = {}
+    for key, field, before, after in changes:
+        by_product.setdefault(key, {})[field] = (before, after)
+    keep_table = True
+    for key, fields in by_product.items():
+        shown = context["shown"][key]
+        name = shown.get("sample_name") or key
+        baseline = {field: shown.get(field) for field in TABLE_COLUMNS}
+        baseline.update({field: before for field, (before, _) in fields.items()})
+        baseline["__field_metadata__"] = shown.get("__field_metadata__", {})
+        category = fields.get("category")
+        if category and category[1] == "Non-Food" and category[0] != "Non-Food":
+            # Non-Food empties the nutrition: ask first (see _non_food_dialog).
+            fields = {field: value for field, value in fields.items() if field != "category"}
+            st.session_state.pending_non_food = {
+                "view": view, "key": key, "name": name, "baseline": baseline,
+                "before": {field: shown.get(field) for field in ("category",) + NUTRIENT_COLUMNS},
+            }
+        if not fields:
+            continue
+        after = {field: value for field, (_, value) in fields.items()}
+        before = {field: value for field, (value, _) in fields.items()}
+        keep_table &= _apply_edit(view, key, name, after, before, baseline)
+    if not keep_table:
+        _reset_table(view)
+
+
+def _undo_last() -> None:
+    stack = st.session_state.undo_stack
+    if not stack:
+        return
+    entry = stack.pop()
+    # Fields missing from "after" were emptied by the edit (Non-Food clears
+    # the nutrition), so the database holds blanks there now.
+    baseline = {field: entry["after"].get(field) for field in entry["before"]}
+    baseline["__field_metadata__"] = None
+    try:
+        report = _save_fields(entry["key"], entry["before"], baseline)
+    except pipeline_services.PipelineBusyError:
+        stack.append(entry)
+        _set_notice("warning", "Undo waits: Sync or Groq is still running. Try again when it finishes.")
+        return
+    except Exception as exc:  # noqa: BLE001
+        stack.append(entry)
+        _set_notice("error", f"Undo failed ({type(exc).__name__}).")
+        return
+    _reset_table(entry["view"])
+    if report.conflicts or report.database_error:
+        _set_notice("warning", f"{entry['name']} changed again since that edit, so it was not undone.")
+        return
+    if len(entry["before"]) == 1:
+        field, value = next(iter(entry["before"].items()))
+        _set_notice("info", f"Undone: {entry['name']} · {_short_label(field)} back to {_format_value(field, value)}")
+    else:
+        _set_notice("info", f"Undone: {entry['name']} is back to how it was.")
+
+
+@st.dialog("Mark as Non-Food?", width="small", on_dismiss=lambda: _cancel_non_food())
+def _non_food_dialog() -> None:
+    pending = st.session_state.pending_non_food
+    st.write(
+        f"**{pending['name']}** will lose its calories and nutrition values. "
+        "The package weight is kept, and Undo brings the values back."
+    )
+    with st.container(horizontal=True):
+        if st.button("Mark as Non-Food", type="primary", key="confirm_non_food"):
+            st.session_state.pending_non_food = None
+            before = dict(pending["before"])
+            if _apply_edit(pending["view"], pending["key"], pending["name"],
+                           {"category": "Non-Food"}, before, pending["baseline"]):
+                _set_notice("success", f"Saved: {pending['name']} is now Non-Food; its nutrition was cleared.")
+            _reset_table(pending["view"])
+            st.rerun()
+        if st.button("Keep the old category", key="cancel_non_food"):
+            _cancel_non_food()
+            st.rerun()
+
+
+def _cancel_non_food() -> None:
+    pending = st.session_state.pending_non_food
+    st.session_state.pending_non_food = None
+    if pending:
+        _reset_table(pending["view"])
+
+
+# --------------------------------------------------------------------------
+# Report files (refreshed after a pause in editing)
+# --------------------------------------------------------------------------
+
+@st.fragment(run_every=1.0)
+def _report_files_status() -> None:
+    state = st.session_state
+    if state.artifacts_pending and time.time() - state.last_edit_at >= EXPORT_DELAY_SECONDS:
+        try:
+            failures = pipeline_services.refresh_review_artifacts(DB_PATH, CHAT_BATCH_PATH)
+            state.artifacts_pending = False
+            state.export_retry_needed = "exports" in failures
+            state.chat_prompt = None
+        except pipeline_services.PipelineBusyError:
+            pass  # try again on the next tick
+        except Exception:  # noqa: BLE001
+            state.artifacts_pending = False
+            state.export_retry_needed = True
+    if state.artifacts_pending:
+        st.caption(":material/sync: Updating report files…")
+    elif state.export_retry_needed:
+        with st.container(horizontal=True, vertical_alignment="center", gap="small"):
+            st.caption(":material/warning: Report files are out of date.")
+            if st.button("Retry export", key="retry_export", type="tertiary", icon=":material/refresh:"):
+                try:
+                    pipeline_services.refresh_exports(DB_PATH)
+                    state.export_retry_needed = False
+                    st.toast("Report files updated", icon=":material/check_circle:")
+                except Exception as exc:  # noqa: BLE001
+                    st.toast(f"Export failed ({type(exc).__name__})", icon=":material/error:")
+                st.rerun(scope="fragment")
+    else:
+        st.caption(":material/check_circle: Report files up to date. Refresh Power BI to see changes.")
+
+
+# --------------------------------------------------------------------------
+# Table
+# --------------------------------------------------------------------------
+
+def _render_table(view: str, products: list[dict[str, Any]], *, with_status: bool) -> None:
+    taxonomy = _taxonomy()
+    keys = [str(product["product_key"]) for product in products]
+    columns = REVIEW_TABLE_COLUMNS if with_status else TABLE_COLUMNS
+    records = []
+    shown: dict[str, dict[str, Any]] = {}
+    for product in products:
+        values = {field: product.get(field) for field in TABLE_COLUMNS}
+        values["__field_metadata__"] = product.get("field_metadata", {})
+        shown[str(product["product_key"])] = values
+        record = {field: product.get(field) for field in TABLE_COLUMNS}
+        if with_status:
+            record["review_status"] = _status(product, taxonomy.category_to_macro)
+        records.append(record)
+    frame = pd.DataFrame(records, columns=columns, index=pd.Index(keys, name="product_key"))
+    for column in NUMERIC_COLUMNS:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+
+    digest = hashlib.sha1("|".join(keys).encode()).hexdigest()[:10]
+    version = st.session_state.editor_versions.get(view, 0)
+    editor_key = f"{view}_table_{version}_{digest}"
+    st.session_state.editor_context[editor_key] = {"view": view, "keys": keys, "shown": shown}
+    st.data_editor(
+        frame,
+        key=editor_key,
+        hide_index=True,
+        width="stretch",
+        height=min(600, 35 * (len(frame) + 1) + 3),
+        num_rows="fixed",
+        placeholder="",
+        disabled=["review_status", "sample_name", "macro_category"],
+        on_change=_on_table_edit,
+        args=(editor_key,),
+        column_config={
+            "review_status": st.column_config.TextColumn("Status", width=130),
+            "sample_name": st.column_config.TextColumn("Product", pinned=True, width=240),
+            "macro_category": st.column_config.TextColumn(
+                "Group", help="Follows from the category.", width=125
+            ),
+            "category": st.column_config.SelectboxColumn(
+                "Category", options=[""] + list(taxonomy.category_to_macro), width=165
+            ),
+            **{
+                field: st.column_config.NumberColumn(
+                    COLUMN_TITLES[field], help=FIELD_LABELS[field], min_value=0.0, format="%.4g",
+                    width=92 if field == "package_weight_g" else 70,
+                )
+                for field in NUMERIC_COLUMNS
+            },
+        },
     )
 
 
-def _progress_display(label: str):
-    status = st.status(label, expanded=True)
-    progress = st.progress(0.0)
-
-    def update(event: pipeline_services.ProgressEvent) -> None:
-        status.write(f"{event.stage}: {event.message}")
-        if event.total and event.total > 0 and event.completed is not None:
-            progress.progress(min(1.0, max(0.0, event.completed / event.total)))
-        if event.status == "failed":
-            status.update(label=f"{label} — failed", state="error")
-        elif event.status in {"completed", "partial"} and event.stage in {"sync", "exports"}:
-            status.update(label=event.message, state="complete" if event.status == "completed" else "error")
-
-    return status, update
+_NOTICE_ICONS = {
+    "success": ":green[:material/check_circle:]",
+    "info": ":blue[:material/undo:]",
+    "warning": ":orange[:material/warning:]",
+    "error": ":red[:material/error:]",
+}
 
 
-def _save_settings() -> None:
+def _render_notice(default: str) -> None:
+    """The latest save message (or ``default``) and Undo, in one row.
+
+    Call this inside a container that is rendered on every run. The table
+    below must keep its position in the page: if an element appeared above it
+    only after a save, Streamlit would rebuild the table and the cell cursor
+    would be lost while the user is typing.
+    """
+    notice = st.session_state.notice
+    if notice:
+        level, text = notice
+        st.markdown(f"{_NOTICE_ICONS.get(level, '')} {text}")
+    else:
+        st.markdown(default)
+    if st.session_state.undo_stack:
+        st.button("Undo", key="undo_last", type="tertiary", icon=":material/undo:", on_click=_undo_last)
+
+
+# --------------------------------------------------------------------------
+# Views
+# --------------------------------------------------------------------------
+
+def _render_todo() -> None:
+    products = _todo_products()
+    taxonomy = _taxonomy()
+    incomplete = [
+        product for product in products
+        if _status(product, taxonomy.category_to_macro) != COMPLETE_STATUS
+    ]
+    if not products:
+        default = ""
+    elif incomplete:
+        default = "Edits save automatically."
+    else:
+        default = ":green[:material/task_alt:] All done. These products are complete now."
+    with st.container(horizontal=True, vertical_alignment="center", gap="small"):
+        _render_notice(default)
+        st.space("stretch")
+        names = {str(product["product_key"]): product.get("sample_name") for product in products}
+        st.button("Complete with Groq", key="open_groq", icon=":material/done_all:",
+                  disabled=not incomplete, on_click=_open_dialog,
+                  args=("groq", [str(product["product_key"]) for product in incomplete], names))
+        st.button("Use your chatbot", key="open_chatbot", icon=":material/chat:",
+                  disabled=not incomplete, on_click=_open_dialog, args=("chatbot", [], names))
+    if not products:
+        st.success("Nothing to complete. Every product has a category and nutrition values.",
+                   icon=":material/task_alt:")
+        return
+    _render_table("todo", products, with_status=True)
+    if any(product.get("cleared_reason") for product in incomplete):
+        st.caption(
+            "\"Values cleared\": the calories did not match protein, carbs and fat, so the nutrition "
+            "was emptied to be filled again. If the label really says so, type its values; "
+            "values you type are kept."
+        )
+
+
+def _render_all() -> None:
+    query = st.text_input(
+        "Search", key="query", placeholder="Search by name, for example: lapte",
+        label_visibility="collapsed", icon=":material/search:",
+    )
+    products = _all_products()
+    needle = pipeline_services._search_text(query.strip())
+    if needle:
+        products = [
+            product for product in products
+            if needle in pipeline_services._search_text(product.get("sample_name") or "")
+        ]
+    count = f"{len(products):,} product{'s' if len(products) != 1 else ''}"
+    with st.container(horizontal=True, vertical_alignment="center", gap="small"):
+        _render_notice(f"{count}. Edits save automatically.")
+    if not products:
+        st.info("No product matches. Try a shorter part of the name.")
+        return
+    _render_table("all", products, with_status=False)
+
+
+def _render_settings() -> None:
     public = load_public_ai_settings(ENV_PATH)
-    with st.expander("AI settings", expanded=not public.settings_configured, icon=":material/settings:"):
-        st.caption("Save settings, then click Complete with Groq. Saving settings does not start AI. Sync will also use these settings.")
+    with st.container(width=620):
+        st.subheader("AI completion")
         labels = list(AI_MODE_LABELS.values())
         mode_by_label = {label: mode for mode, label in AI_MODE_LABELS.items()}
         selected_label = st.selectbox(
@@ -293,30 +728,20 @@ def _save_settings() -> None:
                 public.mode if public.settings_configured else "categories_and_nutrition"
             ]),
             key="setting_ai_mode",
-            help="AI fills empty fields only. It does not replace your manual changes.",
+            help="AI fills empty fields only. It never replaces values you typed.",
         )
-        st.markdown(
-            f"[Get a Groq API key]({GROQ_KEY_URL}) · Key status: "
-            f"{'configured' if public.api_key_configured else 'not configured'}"
-        )
-        if public.api_key_managed_by_environment:
-            st.caption("The API key is supplied by the process environment and will not be shown here.")
         new_key = st.text_input(
             "Groq API key",
             type="password",
-            placeholder="Leave blank to keep the configured key",
+            placeholder="Leave blank to keep the current key",
             key="setting_groq_key",
             autocomplete="new-password",
         )
-        st.caption(
-            "AI nutrition values are estimates and may differ from the label. "
-            "Groq usage limits apply."
-        )
-        st.caption(
-            "Lidl account setup uses the existing local authentication CLI. "
-            "This app never asks for your Lidl password."
-        )
-        if st.button("Save AI settings", key="save_ai_settings", type="primary", icon=":material/settings:"):
+        status = "set" if public.api_key_configured else "not set yet"
+        st.caption(f"Key: {status}. [Get a free Groq API key]({GROQ_KEY_URL}).")
+        if public.api_key_managed_by_environment:
+            st.caption("The key comes from the process environment and is not shown here.")
+        if st.button("Save settings", key="save_ai_settings", type="primary", icon=":material/save:"):
             try:
                 save_ai_settings(
                     mode=mode_by_label[selected_label],
@@ -325,586 +750,323 @@ def _save_settings() -> None:
                     env_path=ENV_PATH,
                 )
                 st.session_state["clear_groq_key_next_run"] = True
-                st.session_state.review_notices = [("success", "AI settings saved. Click Complete with Groq to start, or use Sync for a full receipt update.")]
+                st.session_state.toast = "Settings saved"
                 st.rerun()
             except (ValueError, OSError) as exc:
                 st.error(str(exc))
+        st.caption(
+            "AI nutrition values are estimates and may differ from the label. Groq usage limits apply. "
+            "Sync uses these settings too."
+        )
+        st.subheader("Lidl account")
+        st.caption(
+            "Sign-in uses the local authentication command (auth_login.py). "
+            "This app never asks for your Lidl password."
+        )
 
 
-def _render_groq_controls(base: dict[str, dict[str, Any]]) -> None:
-    st.subheader("Automatic completion")
-    st.write("Groq fills empty fields using a free AI model. Accepted values are saved right away, with no extra sync.")
-    _save_settings()
+# --------------------------------------------------------------------------
+# Dialogs
+# --------------------------------------------------------------------------
+
+def _progress(label: str):
+    status = st.status(label, expanded=True)
+    bar = st.progress(0.0)
+
+    def update(event: pipeline_services.ProgressEvent) -> None:
+        status.write(event.message)
+        if event.total and event.total > 0 and event.completed is not None:
+            bar.progress(min(1.0, max(0.0, event.completed / event.total)))
+
+    return status, update
+
+
+def _open_dialog(name: str, keys: list[str], names: Mapping[str, Any]) -> None:
+    """Dialogs stay open across reruns until closed or finished."""
+    st.session_state.dialog = {"name": name, "keys": list(keys), "names": dict(names)}
+    if name == "chatbot":
+        st.session_state.chat_prompt = None
+        st.session_state.chat_preview = None
+        st.session_state.chat_preview_response = None
+
+
+def _close_dialog() -> None:
+    st.session_state.dialog = None
+
+
+def _render_open_dialog() -> None:
+    dialog = st.session_state.dialog
+    if not dialog:
+        return
+    if dialog["name"] == "groq":
+        _groq_dialog(dialog["keys"], dialog["names"])
+    elif dialog["name"] == "chatbot":
+        _chatbot_dialog(dialog["names"])
+
+
+@st.dialog("Complete with Groq", width="medium", on_dismiss=_close_dialog)
+def _groq_dialog(keys: list[str], names: Mapping[str, Any]) -> None:
     settings = load_public_ai_settings(ENV_PATH)
-    with st.expander("Advanced: choose specific products", icon=":material/tune:"):
-        subset = st.checkbox("Only process selected products", key="groq_subset")
-        selected = st.multiselect(
-            "Products to complete",
-            options=list(base),
-            format_func=lambda key: f"{base[key].get('sample_name') or key} · {key}",
-            key="retry_ai_products",
-            disabled=not subset,
-        )
-    targets = selected if subset else list(base)
-    st.caption(f"{len(targets)} products selected. Groq fills empty fields allowed by your settings and leaves manual changes alone.")
     if settings.mode == "off" or not settings.api_key_configured:
-        st.info("Choose an AI mode, enter a Groq key, and save AI settings above to enable completion.")
-    if _has_unsaved_review():
-        st.warning("Save changes or discard the current draft before running Groq.")
-    disabled = not targets or settings.mode == "off" or not settings.api_key_configured or _has_unsaved_review()
-    label = "Try Groq again" if st.session_state.groq_summary else "Complete with Groq"
-    if st.button(label, key="retry_ai", disabled=disabled, type="primary", icon=":material/done_all:"):
-        _, callback = _progress_display("Completing products with Groq")
-        try:
-            report = pipeline_services.retry_ai_products(targets, DB_PATH, callback)
-            _invalidate_product_snapshot()
-            _read_review(force=True)
-            remaining = set(st.session_state.review_base or {})
-            enrichment = report.enrichment
-            st.session_state.groq_summary = {
-                "requested": len(targets),
-                "completed": len(set(targets) - remaining),
-                "remaining": len(set(targets) & remaining),
-                "status": getattr(enrichment, "status", "unknown"),
-                "retryable_tasks": getattr(enrichment, "retryable_tasks", 0),
-                "terminal_tasks": getattr(enrichment, "terminal_tasks", 0),
-                "error_code": getattr(enrichment, "error_code", None),
-            }
-            st.session_state.export_retry_needed = "exports" in report.artifact_failures
-            if report.artifact_failures:
-                retry_hint = " Use Retry export for report files; no new Sync is needed." if "exports" in report.artifact_failures else " Report the failed review-file refresh before relying on those files."
-                st.session_state.review_notices = [("warning", "Groq processing finished. Any accepted results were saved, but these derived files could not be updated: " + ", ".join(report.artifact_failures) + "." + retry_hint)]
-            else:
-                st.session_state.review_notices = [("info", "Groq processing finished. Any accepted results are already saved and report files updated. Refresh Power BI to see the changes. Check the outcome below for incomplete products.")]
-            st.session_state.pop("chat_prompt", None)
-            st.session_state["clear_editor_next_run"] = True
-            st.rerun()
-        except pipeline_services.PipelineBusyError:
-            st.warning("Another app session is using the pipeline. Try again shortly.")
-        except Exception as exc:
-            st.error(f"Groq completion failed ({type(exc).__name__}). Previously accepted results may already be saved. No new Sync is required to retry.")
-
-
-def _render_review() -> None:
-    if not st.session_state.review_open:
+        st.write("Groq needs an API key and an AI mode first.")
+        st.button("Open Settings", type="primary", icon=":material/settings:",
+                  on_click=_go_to, args=("settings",))
         return
-    title_col, badge_col, close_col = st.columns(
-        [4.4, 2.2, 1.8], vertical_alignment="center"
-    )
-    with title_col:
-        st.header("Product review", icon=":material/fact_check:")
-    badge_slot = badge_col.empty()
-    with close_col:
-        if st.button("Close review", key="close_review", icon=":material/close:"):
-            st.session_state.review_open = False
-            st.rerun()
-    if not DB_PATH.is_file():
-        st.info("No local product database was found. Complete the initial sync from this app first.", icon=":material/database:")
-        _save_settings()
-        return
-    try:
-        _read_review()
-    except pipeline_services.PipelineBusyError:
-        st.warning("Another app session is updating the product database. Try again shortly.")
-        return
-    except Exception as exc:
-        st.error(f"Could not load the review list ({type(exc).__name__}).")
-        return
-
-    base = st.session_state.review_base or {}
-    sync = pipeline_services._load_sync_module()
-    taxonomy = load_taxonomy(sync.TAXONOMY_PATH)
-    initial_count = len(st.session_state.review_initial_keys or ())
-    cleared = len([product for product in base.values() if product.get("cleared_reason")])
-    badge_slot.markdown(
-        '<div style="text-align:right">'
-        f'<span class="incomplete-badge">{len(base)} incomplete products</span>'
-        "</div>",
-        unsafe_allow_html=True,
-    )
-    st.subheader("What needs attention")
     st.write(
-        f"{len(base)} product(s) still incomplete — {initial_count} when you opened this review."
+        f"Groq fills the empty fields of **{len(keys)} incomplete products** with a free AI model. "
+        "Values you typed yourself are never replaced."
     )
-    summary = st.session_state.groq_summary
-    if summary:
-        st.subheader("Last completion run")
-        st.write(f"Last Groq run: {summary['requested']} requested · {summary['completed']} now complete · {summary['remaining']} still incomplete from that run.")
-        st.caption(f"Service status: {summary['status']}. Retryable tasks: {summary['retryable_tasks']}. Invalid or abstained tasks: {summary['terminal_tasks']}. Task counts are not product counts.")
-        if summary["error_code"]:
-            st.warning(f"Groq reported: {summary['error_code']}", icon=":material/warning:")
-    if base:
-        with st.expander("Still needs attention" if summary else "See products and what to fix", icon=":material/list_alt:"):
-            for product in base.values():
-                missing = missing_required_fields(product, taxonomy.category_to_macro)
-                details = []
-                if missing:
-                    details.append(f"Missing: {', '.join(FIELD_LABELS.get(field, field) for field in missing)}")
-                if product.get("cleared_reason"):
-                    details.append(f"Values cleared: {product['cleared_reason']}")
-                st.write(f"{product.get('sample_name') or product['product_key']} — {' · '.join(details)}")
-            if summary:
-                st.caption("Incomplete products still have missing fields. This does not always mean Groq gave a bad answer. Use your chatbot or edit them below.")
-            if cleared:
-                st.caption("Values cleared: calories did not match protein, carbs and fat, so the nutrition was emptied for Groq or your chatbot to fill again. If the label really says so, type its values and click Save changes; values you save are kept.")
-    if not base:
-        st.success("No products currently need review.")
-        _save_settings()
-        return
-    st.subheader("Two ways to finish these products")
-    groq_column, chatbot_column = st.columns(2)
-    groq_controls = groq_column.container(border=True)
-    # Capture current editor changes before evaluating Groq's draft guard. The
-    # container places its controls above the editor while executing them later.
-    st.subheader("Check and edit")
-    st.caption("Edit any value, then click Save changes. This updates report files without a new Sync or Groq call.")
-    rendered = _display_rows()
-    categories = [""] + list(taxonomy.category_to_macro)
-    editor_result = st.data_editor(
-        rendered,
-        key="review_editor",
-        hide_index=True,
-        width="stretch",
-        num_rows="fixed",
-        disabled=True if st.session_state.product_edits else ["review_status", "sample_name", "macro_category"],
-        column_config={
-            "review_status": st.column_config.TextColumn("Status"),
-            "sample_name": st.column_config.TextColumn(FIELD_LABELS["sample_name"]),
-            "macro_category": st.column_config.TextColumn(FIELD_LABELS["macro_category"]),
-            "category": st.column_config.SelectboxColumn(
-                "Category", options=categories, required=False
-            ),
-            **{
-                field: st.column_config.NumberColumn(FIELD_LABELS[field], min_value=0.0, format="%.4g")
-                for field in NUMERIC_COLUMNS
-            },
-        },
-    )
-    _capture_editor_changes(editor_result, rendered)
-    if st.session_state.review_manual:
-        st.caption("You have unsaved changes. Click Save changes below.")
-    with groq_controls:
-        _render_groq_controls(base)
-
-    with chatbot_column, st.container(border=True):
-        st.subheader("Use your chatbot")
-        st.write("No API key needed. Copy the incomplete-product batch into your chatbot, paste its JSON response here, validate and preview, then Save changes below.")
-        if st.button("Prepare batch to copy", key="copy_chat_batch", disabled=bool(st.session_state.product_edits), icon=":material/content_copy:"):
-            try:
-                pipeline_services.refresh_chat_batch(DB_PATH, CHAT_BATCH_PATH)
-                prompt = CHAT_BATCH_PATH.read_text(encoding="utf-8") if CHAT_BATCH_PATH.is_file() else ""
-                st.session_state.chat_prompt = prompt
-                if prompt:
-                    st.success("Batch prepared. Use the copy button or the visible manual-copy/download options below.")
-                else:
-                    st.info("There are no chatbot-eligible fields right now.")
-            except Exception as exc:
-                st.error(f"Could not prepare the batch ({type(exc).__name__}).")
-        prompt = st.session_state.get("chat_prompt", "")
-        if prompt:
-            safe_prompt = html.escape(prompt, quote=False)
-            st.iframe(
-                "<textarea id='chat-batch-copy-source' style='display:none'>"
-                f"{safe_prompt}</textarea>"
-                "<button id='chat-batch-copy-button' type='button'>Copy batch to clipboard</button>"
-                "<span id='chat-batch-copy-status' role='status' style='margin-left:0.5rem'></span>"
-                "<script>const b=document.getElementById('chat-batch-copy-button');"
-                "b.addEventListener('click',async()=>{const s=document.getElementById('chat-batch-copy-status');"
-                "try{await navigator.clipboard.writeText(document.getElementById('chat-batch-copy-source').value);"
-                "s.textContent='Copied.';}catch(e){s.textContent='Clipboard access was blocked; copy the text below.';}});</script>",
-                height=48,
-            )
-            st.text_area("Copy manually if needed", prompt, height=180, key="chat_prompt_fallback")
-            st.download_button(
-                "Download batch",
-                prompt,
-                file_name="ai_chat_batch.txt",
-                mime="text/plain",
-                icon=":material/download:",
-            )
-        st.text_area(
-            "Paste AI response (JSON)",
-            key="chat_response_input",
-            height=180,
-            disabled=bool(st.session_state.product_edits),
-            help="Paste the JSON response separately; it will not be inserted into the table automatically.",
+    with st.expander("Only some products", icon=":material/tune:"):
+        selected = st.multiselect(
+            "Products", options=keys, format_func=lambda key: names.get(key) or key,
+            key="groq_selection", placeholder="All incomplete products",
         )
-        if st.button("Validate and preview", key="validate_chat_response", disabled=bool(st.session_state.product_edits), icon=":material/preview:"):
-            blocked = {
-                key: tuple(fields)
-                for key, fields in st.session_state.review_manual.items()
-            }
-            try:
-                preview = pipeline_services.preview_chat_import(
-                    st.session_state.chat_response_input,
-                    DB_PATH,
-                    blocked_fields=blocked,
-                )
-                suggestions: dict[str, dict[str, Any]] = {}
-                for item in preview.suggestions:
-                    fields: dict[str, Any] = {}
-                    if item.category is not None:
-                        fields["category"] = item.category
-                    fields.update(item.nutrients or {})
-                    if item.package_weight_g is not None:
-                        fields["package_weight_g"] = item.package_weight_g
-                    suggestions[item.product_key] = fields
-                st.session_state.review_suggestions = suggestions
-                st.session_state.chat_preview = preview
-                st.session_state.chat_preview_response = st.session_state.chat_response_input
-                st.session_state["clear_editor_next_run"] = True
-                st.success(f"Preview ready: {preview.fields_suggested} suggested field(s); nothing has been saved.")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Could not validate the response ({type(exc).__name__}).")
-        preview = st.session_state.chat_preview if _chat_preview_is_current() else None
-        if st.session_state.chat_response_input.strip() and preview is None:
-            st.info("This response has not been previewed. Validate it again before saving.")
-        if preview:
-            if preview.issues:
-                st.warning("Validation issues")
-                for issue in preview.issues:
-                    st.write(f"{issue.product_key or 'Response'} · {issue.field_name or issue.code}: {issue.message}")
-            if preview.skipped:
-                st.info("Some fields were ignored because they are stale, protected, or not currently eligible.")
-                for skipped in preview.skipped:
-                    st.write(f"{skipped.product_key or 'Product'} · {skipped.field_name or skipped.code}: {skipped.message}")
-
-    chat_text = st.session_state.chat_response_input
-    preview_current = _chat_preview_is_current()
-    if chat_text.strip() and not preview_current:
-        st.info("Preview the exact pasted response before saving. Clear it to save manual edits only.")
-    save_disabled = bool(st.session_state.product_edits) or not _has_review_draft() or (bool(chat_text.strip()) and not preview_current)
-    col_save, col_discard = st.columns(2)
-    with col_save:
-        if st.button("Save changes", key="save_review", disabled=save_disabled, type="primary", icon=":material/save:"):
-            try:
-                report = pipeline_services.save_review_session(
-                    manual_edits=_manual_edits_for_save(),
-                    baselines=_baseline_values(),
-                    response_text=chat_text if preview_current else "",
-                    db_path=DB_PATH,
-                    output_path=CHAT_BATCH_PATH,
-                )
-                _invalidate_product_snapshot()
-                if "exports" in report.artifact_failures:
-                    st.session_state.export_retry_needed = True
-                notices = []
-                if report.database_error:
-                    notices.append(("error", "Saving stopped. Some changes may already be saved. Your edits are still here; check the values before trying again."))
-                elif "exports" in report.artifact_failures:
-                    notices.append(("error", "Your changes were saved, but report files could not be updated. Retry export — your edits have not been lost. No new Sync is needed."))
-                elif report.artifact_failures:
-                    notices.append(("warning",
-                        "Your changes were saved, but these review artifacts failed to refresh: "
-                        + ", ".join(report.artifact_failures)
-                    ))
-                else:
-                    if report.conflicts:
-                        saved = report.manual_fields_saved or (report.chat_import and report.chat_import.fields_saved)
-                        notices.append(("info", "Some changes were saved. See the fields not saved below." if saved else "No changes were saved. See the fields below."))
-                    else:
-                        notices.append(("success", "Changes saved and report files updated. Refresh Power BI to see the changes."))
-                if report.conflicts:
-                    notices.append(("warning", _conflict_message(report.conflicts, st.session_state.review_base or {})))
-                st.session_state.review_notices = notices
-                for level, message in notices:
-                    getattr(st, level)(message)
-                if not report.database_error and not report.conflicts:
-                    st.session_state.review_manual = {}
-                    st.session_state.review_suggestions = {}
-                    st.session_state.chat_preview = None
-                    st.session_state.chat_preview_response = None
-                    st.session_state["clear_chat_response_next_run"] = True
-                    _read_review(force=True)
-                    st.session_state.pop("chat_prompt", None)
-                    st.session_state["clear_editor_next_run"] = True
-                    st.session_state.export_retry_needed = "exports" in report.artifact_failures
-                    st.rerun()
-            except pipeline_services.PipelineBusyError:
-                message = "Another app session is using the pipeline. Your draft is preserved; try again shortly."
-                st.session_state.review_notices = [("warning", message)]
-                st.warning(message)
-            except Exception as exc:
-                message = f"Save failed ({type(exc).__name__}). Your draft is preserved."
-                st.session_state.review_notices = [("error", message)]
-                st.error(message)
-    with col_discard:
-        if st.button("Discard changes", key="discard_review", disabled=not _has_review_draft(), icon=":material/undo:"):
-            st.session_state.review_manual = {}
-            st.session_state.review_suggestions = {}
-            st.session_state["clear_chat_response_next_run"] = True
-            st.session_state.chat_preview = None
-            st.session_state.chat_preview_response = None
-            st.session_state.review_base = None
-            st.session_state["clear_editor_next_run"] = True
-            st.rerun()
-
-
-def _render_product_search() -> None:
-    with st.expander("Find and edit a product", expanded=False, icon=":material/search:"):
-        st.write("Search all local products, including those already complete. Type part of a name; accents and letter case do not matter.")
-        if not DB_PATH.is_file():
-            st.info("No local product database was found. Complete the initial sync first.")
-            return
-        review_dirty = _has_review_draft()
-        dirty = bool(st.session_state.product_edits)
-        if review_dirty:
-            st.info("Save or discard your product-review draft before editing another product here.")
-        if dirty:
-            st.info("You have unsaved product changes. Save changes or discard them before changing product, syncing, or running Groq.")
-        query = st.text_input(
-            "Search by part of product name", key="product_search_query",
-            placeholder="For example: lapte",
-            help="Type a name fragment and press Enter to see matching suggestions. No exact name or diacritics needed.",
-            disabled=dirty or review_dirty,
-        )
+    targets = selected or keys
+    st.caption("Sends only product names, codes and package weight. It can take a few minutes.")
+    if st.button(f"Complete {len(targets)} product{'s' if len(targets) != 1 else ''}",
+                 type="primary", icon=":material/done_all:", key="start_groq"):
+        status, update = _progress("Completing products with Groq")
         try:
-            if not dirty and not review_dirty:
-                st.session_state.product_search_results = pipeline_services.search_products(query, DB_PATH)
-            matches = st.session_state.product_search_results
-            names = {row["product_key"]: row["sample_name"] for row in matches}
-            if query.strip() and not matches:
-                st.info("No matching products. Try a shorter name fragment.")
-            if len(matches) == 20:
-                st.caption("Showing the first 20 matches. Type a longer fragment to narrow the suggestions.")
-            selected = st.selectbox(
-                "Matching products", options=list(names), index=None,
-                format_func=lambda key: f"{names[key] or '(unnamed)'} · {key}",
-                key="product_search_selection", placeholder="Select a product to edit",
-                disabled=dirty or review_dirty,
-            )
-            if selected is None:
-                return
-            baseline = st.session_state.product_base
-            if baseline is None or baseline["product_key"] != selected:
-                if dirty:
-                    st.warning("Save or discard the current product draft first.")
-                    return
-                baseline = pipeline_services.read_product(selected, DB_PATH)
-                st.session_state.product_base = baseline
-                st.session_state.product_edits = {}
-                st.session_state.pop("product_editor", None)
-            if baseline is None:
-                st.warning("This product is no longer available. Search again.")
-                return
+            report = pipeline_services.retry_ai_products(targets, DB_PATH, update)
         except pipeline_services.PipelineBusyError:
-            st.warning("The workspace is busy. Your product draft is preserved; try again shortly.")
+            status.update(label="Sync or another Groq run is still going. Try again shortly.", state="error")
             return
-        except Exception as exc:
-            st.error(f"Could not load products ({type(exc).__name__}). Your draft is preserved.")
+        except Exception as exc:  # noqa: BLE001
+            status.update(label=f"Groq stopped ({type(exc).__name__}). Values already accepted are saved.",
+                          state="error")
             return
+        remaining = {
+            str(product["product_key"]) for product in pipeline_services.read_review_products(DB_PATH)
+        }
+        done = len(set(targets) - remaining)
+        left = len(set(targets) & remaining)
+        error = getattr(report.enrichment, "error_code", None)
+        text = f"Groq completed {done} of {len(targets)} products."
+        if left:
+            text += f" {left} still need values: try again, use your chatbot, or type them."
+        if error:
+            text += f" Groq reported: {error}."
+        st.session_state.export_retry_needed = "exports" in report.artifact_failures
+        st.session_state.artifacts_pending = False
+        _set_notice("warning" if left or error else "success", text)
+        _data_changed()
+        _reset_table("todo")
+        _close_dialog()
+        st.rerun()
 
-        taxonomy = load_taxonomy(pipeline_services._load_sync_module().TAXONOMY_PATH)
-        frame = pd.DataFrame([{field: baseline.get(field) for field in TABLE_COLUMNS}], columns=TABLE_COLUMNS)
-        for field in NUMERIC_COLUMNS:
-            frame[field] = pd.to_numeric(frame[field], errors="coerce")
-        edited = st.data_editor(
-            frame, key="product_editor", hide_index=True, width="stretch", num_rows="fixed",
-            disabled=True if review_dirty else ["sample_name", "macro_category"],
-            column_config={
-                # Display the derived macro below instead of a stale baseline
-                # macro cell while the category is being edited.
-                "macro_category": None,
-                "sample_name": st.column_config.TextColumn("Product"),
-                "category": st.column_config.SelectboxColumn("Category", options=[""] + list(taxonomy.category_to_macro)),
-                **{field: st.column_config.NumberColumn(FIELD_LABELS[field], min_value=0.0, format="%.4g") for field in NUMERIC_COLUMNS},
-            },
-            on_change=_capture_product_edits,
-        )
-        category = _blank(edited.iloc[0]["category"])
-        st.caption(f"Derived macro-category: {taxonomy.category_to_macro.get(category) or 'Unknown'}. Product name is read-only.")
-        if category == "Non-Food" and baseline.get("category") != "Non-Food":
-            st.warning("Saving Non-Food clears all nutrition values and their provenance; package weight is preserved.")
-        edits = st.session_state.product_edits
-        save_col, discard_col = st.columns(2)
-        with save_col:
-            if st.button("Save changes", key="save_product", disabled=not edits or review_dirty, type="primary", icon=":material/save:"):
-                original = {field: baseline.get(field) for field in TABLE_COLUMNS}
-                original["__field_metadata__"] = baseline.get("field_metadata", {})
-                try:
-                    report = pipeline_services.save_review_session(
-                        manual_edits={selected: dict(edits)}, baselines={selected: original},
-                        db_path=DB_PATH, output_path=CHAT_BATCH_PATH,
-                    )
-                    if "exports" in report.artifact_failures:
-                        st.session_state.export_retry_needed = True
-                    elif report.manual_fields_saved and not report.artifact_failures:
-                        st.session_state.export_retry_needed = False
-                    if report.database_error:
-                        notices = [("error", "Product save stopped. Some changes may already be saved. Your draft is preserved; review current values before retrying.")]
-                    elif report.conflicts:
-                        notices = [("warning", _conflict_message(report.conflicts, {selected: baseline}))]
-                    elif report.artifact_failures:
-                        notices = [("warning", "Changes saved, but these derived files could not be updated: " + ", ".join(report.artifact_failures) + ". Use Retry export for report files; no new Sync is needed.")]
-                    else:
-                        notices = [("success", "Changes saved and report files updated. Refresh Power BI to see the changes.")]
-                    st.session_state.review_notices = notices
-                    st.session_state.review_base = None
-                    st.session_state.pop("chat_prompt", None)
-                    if not report.database_error and not report.conflicts:
-                        st.session_state.product_edits = {}
-                        _invalidate_product_snapshot()
-                    st.rerun()
-                except Exception as exc:
-                    message = f"Product save failed ({type(exc).__name__}). Your draft is preserved."
-                    st.session_state.review_notices = [("error", message)]
-                    st.error(message)
-        with discard_col:
-            if st.button("Discard product changes", key="discard_product", disabled=not edits, icon=":material/undo:"):
-                st.session_state.product_edits = {}
-                _invalidate_product_snapshot()
-                st.rerun()
+
+def _suggestion_rows(preview, names: Mapping[str, Any]) -> pd.DataFrame:
+    rows = []
+    for item in preview.suggestions:
+        row: dict[str, Any] = {"Product": names.get(item.product_key) or item.product_key}
+        if item.category is not None:
+            row["Category"] = item.category
+        if item.package_weight_g is not None:
+            row[COLUMN_TITLES["package_weight_g"]] = item.package_weight_g
+        for field, value in (item.nutrients or {}).items():
+            row[COLUMN_TITLES.get(field, field)] = value
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+@st.dialog("Use your chatbot", width="large", on_dismiss=_close_dialog)
+def _chatbot_dialog(names: Mapping[str, Any]) -> None:
+    state = st.session_state
+    if state.chat_prompt is None:
+        try:
+            pipeline_services.refresh_chat_batch(DB_PATH, CHAT_BATCH_PATH)
+            state.chat_prompt = (
+                CHAT_BATCH_PATH.read_text(encoding="utf-8") if CHAT_BATCH_PATH.is_file() else ""
+            )
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Could not prepare the request ({type(exc).__name__}).")
+            return
+    if not state.chat_prompt:
+        st.info("Nothing to ask right now: no product has empty fields a chatbot can fill.")
+        return
+    st.markdown("**1. Copy this request into your chatbot** (ChatGPT, Claude, Gemini…)")
+    st.caption("Use the copy icon in the top-right corner of the box. No API key needed.")
+    st.code(state.chat_prompt, language=None, height=180, wrap_lines=True)
+    st.markdown("**2. Paste its answer here**")
+    answer = st.text_area(
+        "Chatbot answer", key="chat_answer", height=140, label_visibility="collapsed",
+        placeholder='Paste the JSON answer, for example {"products": [...]}',
+    )
+    if st.button("Check answer", key="check_chat_answer", icon=":material/fact_check:",
+                 disabled=not answer.strip()):
+        try:
+            state.chat_preview = pipeline_services.preview_chat_import(answer, DB_PATH)
+            state.chat_preview_response = answer
+        except Exception as exc:  # noqa: BLE001
+            state.chat_preview = None
+            st.error(f"Could not read this answer ({type(exc).__name__}). Paste the whole JSON answer.")
+    preview = state.chat_preview if state.chat_preview_response == answer and answer.strip() else None
+    if preview is None:
+        return
+    st.markdown("**3. Check the values and save**")
+    if preview.suggestions:
+        st.dataframe(_suggestion_rows(preview, names), hide_index=True, width="stretch")
+    problems = list(preview.issues) + list(preview.skipped)
+    if problems:
+        with st.expander(f"{len(problems)} value(s) left out", icon=":material/info:"):
+            for issue in problems:
+                product = names.get(issue.product_key) or issue.product_key or "Answer"
+                st.caption(f"{product} · {FIELD_LABELS.get(issue.field_name or '', issue.field_name or issue.code)}: "
+                           f"{issue.message}")
+    count = preview.fields_suggested
+    if not count:
+        st.info("Nothing in this answer can be saved.")
+        return
+    if st.button(f"Save {count} suggested value{'s' if count != 1 else ''}", type="primary",
+                 icon=":material/save:", key="save_chat_answer"):
+        try:
+            report = pipeline_services.save_review_session(
+                manual_edits={}, baselines={}, response_text=answer,
+                db_path=DB_PATH, output_path=CHAT_BATCH_PATH,
+            )
+        except pipeline_services.PipelineBusyError:
+            st.warning("Sync or Groq is still running. Try again when it finishes.")
+            return
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Saving stopped ({type(exc).__name__}). Some values may already be saved.")
+            return
+        saved = report.chat_import.fields_saved if report.chat_import else 0
+        state.export_retry_needed = "exports" in report.artifact_failures
+        state.chat_prompt = None
+        state.chat_preview = None
+        state.chat_preview_response = None
+        state["clear_chat_answer_next_run"] = True
+        _set_notice("success", f"Saved {saved} value{'s' if saved != 1 else ''} from your chatbot.")
+        _data_changed()
+        _reset_table("todo")
+        _close_dialog()
+        st.rerun()
+
+
+# --------------------------------------------------------------------------
+# Sync
+# --------------------------------------------------------------------------
+
+def _run_sync() -> None:
+    status, update = _progress("Syncing receipts and products")
+    exports_failed = {"value": False}
+
+    def callback(event: pipeline_services.ProgressEvent) -> None:
+        update(event)
+        if event.stage == "exports" and event.status == "failed":
+            exports_failed["value"] = True
+
+    try:
+        pipeline_services.run_sync(DB_PATH, callback)
+        count = len(pipeline_services.read_review_products(DB_PATH))
+        st.session_state.export_retry_needed = False
+        st.session_state.artifacts_pending = False
+        text = "Sync complete."
+        text += f" {count} product{'s' if count != 1 else ''} to complete." if count else " Nothing to complete."
+        _set_notice("success", text)
+    except pipeline_services.PipelineBusyError:
+        _set_notice("warning", "Another update is already running. Wait for it to finish.")
+    except Exception as exc:  # noqa: BLE001
+        if exports_failed["value"]:
+            st.session_state.export_retry_needed = True
+            _set_notice("error", "Sync saved the data, but the report files failed. Use Retry export.")
+        else:
+            _set_notice("error", f"Sync failed ({type(exc).__name__}). Nothing restarts on its own.")
+    finally:
+        st.session_state.sync_running = False
+        st.session_state.todo_keys = None
+        st.session_state.undo_stack = []
+        _data_changed()
+        for view in ("todo", "all"):
+            _reset_table(view)
+    st.rerun()
+
+
+# --------------------------------------------------------------------------
+# Page
+# --------------------------------------------------------------------------
+
+def _start_sync() -> None:
+    st.session_state.sync_running = True
+    st.session_state.notice = None
 
 
 def main() -> None:
-    st.set_page_config(
-        page_title=APP_TITLE,
-        page_icon=":material/receipt_long:",
-        layout="wide",
-    )
-    st.markdown(_STYLE, unsafe_allow_html=True)
-    _empty_review_state()
-    if st.session_state.pop("clear_chat_response_next_run", False):
-        st.session_state.chat_response_input = ""
+    st.set_page_config(page_title=APP_TITLE, page_icon=":material/receipt_long:", layout="wide")
+    _init_state()
+    st.html(_style(BACKGROUND_PATH.is_file()))
     if st.session_state.pop("clear_groq_key_next_run", False):
         st.session_state.setting_groq_key = ""
-    if st.session_state.pop("clear_editor_next_run", False):
-        st.session_state.pop("review_editor", None)
-    if st.session_state.pop("clear_product_editor_next_run", False):
-        st.session_state.pop("product_editor", None)
-    if st.session_state.get("chat_response_input", "").strip() and not _chat_preview_is_current():
-        st.caption("Validate the pasted chatbot response before saving it.")
-    st.title(APP_TITLE, icon=":material/receipt_long:")
-    for level, message in st.session_state.review_notices:
-        getattr(st, level)(message)
-    if not st.session_state.review_open:
-        st.caption("Sync to bring in new receipts. Product review finishes existing products without a new sync.")
+    if st.session_state.pop("clear_chat_answer_next_run", False):
+        st.session_state.chat_answer = ""
+    if st.session_state.toast:
+        st.toast(st.session_state.toast, icon=":material/check_circle:")
+        st.session_state.toast = None
 
-    if not DB_PATH.is_file():
-        st.info(
-            "Initial setup is required. Use Sync to create the local product database. "
-            "If Lidl authentication is missing, run the existing local authentication CLI; "
-            "this app will not ask for your Lidl password.",
-            icon=":material/database:",
-        )
-    if _has_unsaved_review():
-        st.warning("You have an unsaved review draft. Save or discard it before Sync or AI retry.", icon=":material/edit_note:")
-    sync_running = st.session_state.get("sync_running", False)
-    sync_disabled = _has_unsaved_review() or sync_running
-    action_left, action_mid, action_right = st.columns(
-        [1.2, 2.2, 6.6], vertical_alignment="center"
-    )
-    with action_left:
-        sync_clicked = st.button(
-            "Sync",
-            type="primary",
-            disabled=sync_disabled,
-            key="sync_pipeline",
-            icon=":material/sync:",
-        )
-    with action_mid:
-        review_clicked = st.button(
-            "Review products", key="open_review", icon=":material/fact_check:",
-            disabled=sync_running,
-        )
-        export_retry = st.session_state.get("export_retry_needed", False)
-        export_clicked = export_retry and st.button(
-            "Retry export", key="retry_export", icon=":material/refresh:",
-            disabled=sync_running,
-        )
-    # Search lives in the action row but is filled after _render_review(), so
-    # review drafts are evaluated first and two editors cannot save over each
-    # other's pending work.
-    product_search_container = action_right.container()
+    has_db = DB_PATH.is_file()
+    running = st.session_state.sync_running
+    with st.container(key="masthead"):
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.title(APP_TITLE, icon=":material/receipt_long:", width="content")
+            st.space("stretch")
+            _theme_toggle(key="theme_toggle", width="content")
+            st.button("Sync", key="sync_pipeline", type="primary", icon=":material/sync:",
+                      disabled=running, on_click=_start_sync,
+                      help="Bring in new receipts, then complete and export products.")
 
-    if sync_clicked:
-        st.session_state.sync_running = True
-        st.rerun()
-
-    if st.session_state.get("sync_running", False):
-        _, callback = _progress_display("Synchronizing")
-        st.session_state.last_sync_complete = False
-        sync_state = {"exports_failed": False}
-
-        def sync_callback(event: pipeline_services.ProgressEvent) -> None:
-            callback(event)
-            if event.stage == "exports" and event.status == "failed":
-                sync_state["exports_failed"] = True
-
+    review_count = None
+    if has_db and not running:
         try:
-            pipeline_services.run_sync(DB_PATH, sync_callback)
-            _invalidate_product_snapshot()
-            count = len(pipeline_services.read_review_products(DB_PATH))
-            st.session_state.review_base = None
-            st.session_state.review_initial_keys = None
-            st.session_state.groq_summary = None
-            st.session_state.review_notices = []
-            st.session_state.review_suggestions = {}
-            st.session_state.chat_preview = None
-            st.session_state.chat_preview_response = None
-            st.session_state["clear_editor_next_run"] = True
-            st.session_state.last_sync_complete = True
-            st.session_state.last_sync_review_count = count
-            st.session_state.sync_completion_prompt = count > 0
-            st.success("Synchronization complete.")
+            review_count = len(pipeline_services.read_review_products(DB_PATH))
         except pipeline_services.PipelineBusyError:
-            st.warning("Another app session is running an update. Wait for it to finish before trying again.")
-        except Exception as exc:
-            if sync_state["exports_failed"]:
-                st.session_state.export_retry_needed = True
-                st.error(
-                    "Synchronization reached the report export stage and failed. "
-                    "Earlier database updates may already be saved; use Retry export to refresh report files only."
-                )
-            else:
-                st.error(f"Synchronization failed ({type(exc).__name__}). No operation was started automatically on page refresh.")
-        finally:
-            st.session_state.sync_running = False
-            st.rerun()
+            review_count = None
+    labels = {
+        "todo": ":material/fact_check: To complete"
+        + (f" ({review_count})" if review_count is not None else ""),
+        "all": ":material/inventory_2: All products",
+        "settings": ":material/settings: Settings",
+    }
+    with st.container(horizontal=True, vertical_alignment="center", key="views"):
+        view = st.segmented_control(
+            "View", VIEWS, format_func=labels.get, default="todo", required=True,
+            key="view", bind="query-params", on_change=_on_view_change,
+            label_visibility="collapsed",
+        ) or "todo"
+        st.space("stretch")
+        if has_db:
+            with st.container(key="statusline", width="content"):
+                _report_files_status()
 
-    if st.session_state.get("sync_completion_prompt"):
-        count = st.session_state.last_sync_review_count or 0
-        st.info(f"{count} products need review.", icon=":material/fact_check:")
-        if st.button("Dismiss", key="close_sync_prompt", icon=":material/close:"):
-            st.session_state.sync_completion_prompt = False
-            st.rerun()
-
-    if review_clicked:
-        if not st.session_state.review_open and not _has_unsaved_review():
-            st.session_state.review_initial_keys = None
-            st.session_state.review_base = None
-            st.session_state.groq_summary = None
-        st.session_state.review_open = True
-        st.session_state.sync_completion_prompt = False
-        st.rerun()
-
-    if export_clicked:
-        _, callback = _progress_display("Refreshing report files")
-        try:
-            pipeline_services.refresh_exports(DB_PATH, callback)
-            st.session_state.export_retry_needed = False
-            st.session_state.review_notices = [("success", "Report files updated. Refresh Power BI to see the changes. No new Sync is needed.")]
-            st.rerun()
-        except Exception as exc:
-            message = f"Export retry failed ({type(exc).__name__}). Saved database values are unchanged."
-            st.session_state.review_notices = [("error", message)]
-            st.error(message)
-
-    product_search_container = action_right.container()
-    _render_review()
-    # Fill the action-row slot last: the search widget must not be evaluated
-    # before the product-review editor.
-    with product_search_container:
-        if sync_running:
-            st.info("Product search is unavailable while Sync is running.")
+    with st.container(key="panel"):
+        if running:
+            _run_sync()
+        elif not has_db and view != "settings":
+            st.info(
+                "First run: click Sync to create the local product database. If the Lidl sign-in is "
+                "missing, run the local authentication command first; this app never asks for your "
+                "Lidl password.",
+                icon=":material/database:",
+            )
         else:
-            _render_product_search()
-    st.caption(
-        "AI completion sends only product names, codes, and package weight. "
-        "Receipts, prices, and purchase history stay on this computer."
-    )
-    st.caption(APP_FOOTER)
+            try:
+                if view == "todo":
+                    _render_todo()
+                elif view == "all":
+                    _render_all()
+                else:
+                    _render_settings()
+            except pipeline_services.PipelineBusyError:
+                st.warning("Another update is running. This view loads when it finishes.",
+                           icon=":material/hourglass_top:")
+
+    if st.session_state.pending_non_food:
+        _non_food_dialog()
+    elif not running:
+        _render_open_dialog()
+
+    with st.container(key="footer"):
+        st.caption(PRIVACY_NOTE)
+        st.caption(APP_FOOTER)
 
 
 if __name__ == "__main__":

@@ -458,6 +458,74 @@ def read_product(
             connection.close()
 
 
+def read_products(
+    product_keys: list[str] | tuple[str, ...] | None = None,
+    db_path: str | os.PathLike[str] | None = None,
+) -> list[dict[str, object]]:
+    """Read products with their field provenance, ordered by name.
+
+    ``None`` reads every product; a key list reads only those products (keys
+    that no longer exist are left out). Each product carries
+    ``field_metadata`` and ``cleared_reason`` like the review worklist does,
+    so the app can show the same status for complete and incomplete rows.
+    """
+    from product_store.services import CLEARED_NOTE_PREFIX
+
+    path = _database_path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Product database does not exist: {path}")
+    keys = None if product_keys is None else [str(key) for key in product_keys]
+    if keys == []:
+        return []
+    with _exclusive_operation(path):
+        connection = duckdb.connect(str(path), read_only=True)
+        try:
+            columns = {
+                row[0] for row in connection.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'nutrition_cache'"
+                ).fetchall()
+            }
+            note = "atwater_debug" if "atwater_debug" in columns else "NULL"
+            fields = ("product_key", "sample_name", *FIELD_NAMES)
+            where, parameters = "", []
+            if keys is not None:
+                where = f" WHERE product_key IN ({', '.join('?' for _ in keys)})"
+                parameters = keys
+            rows = connection.execute(
+                f"SELECT {', '.join(fields)}, {note} FROM nutrition_cache{where}",
+                parameters,
+            ).fetchall()
+            try:
+                metadata_rows = connection.execute(
+                    f"SELECT product_key, field_name, source, is_protected, provider, model, updated_at "
+                    f"FROM {METADATA_TABLE}"
+                    + (where if keys is not None else ""),
+                    parameters,
+                ).fetchall()
+            except duckdb.CatalogException:
+                metadata_rows = []
+        finally:
+            connection.close()
+    metadata_by_key: dict[str, dict[str, tuple[object, ...]]] = {}
+    for key, field_name, source, protected, provider, model, updated_at in metadata_rows:
+        metadata_by_key.setdefault(str(key), {})[str(field_name)] = (
+            source, bool(protected), provider, model, updated_at
+        )
+    products = []
+    for row in rows:
+        product = dict(zip(fields, row[:-1]))
+        product["product_key"] = str(product["product_key"])
+        debug = row[-1] if isinstance(row[-1], str) else ""
+        product["cleared_reason"] = (
+            debug[len(CLEARED_NOTE_PREFIX):] if debug.startswith(CLEARED_NOTE_PREFIX) else None
+        )
+        product["field_metadata"] = metadata_by_key.get(product["product_key"], {})
+        products.append(product)
+    products.sort(key=lambda item: (_search_text(item["sample_name"] or ""), item["product_key"]))
+    return products
+
+
 def read_review_products(
     db_path: str | os.PathLike[str] | None = None,
 ) -> list[dict[str, object]]:
@@ -719,6 +787,71 @@ def preview_chat_import(
             connection.close()
 
 
+def refresh_review_artifacts(
+    db_path: str | os.PathLike[str] | None = None,
+    output_path: str | os.PathLike[str] = DEFAULT_CHAT_BATCH_PATH,
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[str, ...]:
+    """Refresh the review CSV, chatbot batch and report files from the DB.
+
+    The app saves each cell edit with ``refresh_artifacts=False`` and calls
+    this once the user pauses, so typing is not slowed by a Parquet export per
+    cell. Returns the stages that failed; an empty tuple means all succeeded.
+    """
+    sync = _load_sync_module()
+    path = _database_path(db_path, sync)
+    if not path.is_file():
+        raise FileNotFoundError(f"Product database does not exist: {path}")
+
+    from ai_eval.taxonomy import load_taxonomy
+
+    with _exclusive_operation(path):
+        connection = duckdb.connect(str(path))
+        try:
+            taxonomy = load_taxonomy(sync.TAXONOMY_PATH)
+            return _refresh_artifacts(connection, sync, taxonomy, output_path, progress_callback)
+        finally:
+            connection.close()
+
+
+def _refresh_artifacts(
+    connection: duckdb.DuckDBPyConnection,
+    sync,
+    taxonomy,
+    output_path: str | os.PathLike[str],
+    progress_callback: ProgressCallback | None,
+) -> tuple[str, ...]:
+    """Attempt every derived refresh; return the stages that failed."""
+    operations = (
+        (
+            "review_refresh",
+            lambda: regenerate_review_csv(
+                connection,
+                taxonomy.category_to_macro,
+                sync.REVIEW_QUEUE_PATH,
+                sync.OVERRIDE_COLUMNS,
+            ),
+        ),
+        (
+            "chat_batch_refresh",
+            lambda: refresh_chat_batch_file(
+                connection,
+                taxonomy,
+                taxonomy.category_to_macro,
+                output_path,
+            ),
+        ),
+        ("exports", lambda: sync.export_views_for_bi(connection)),
+    )
+    failures: list[str] = []
+    for stage, operation in operations:
+        try:
+            _run_stage(progress_callback, stage, operation)
+        except Exception:
+            failures.append(stage)
+    return tuple(failures)
+
+
 def _refresh_chat_import_artifacts(
     connection: duckdb.DuckDBPyConnection,
     sync,
@@ -835,14 +968,20 @@ def save_review_session(
     db_path: str | os.PathLike[str] | None = None,
     output_path: str | os.PathLike[str] = DEFAULT_CHAT_BATCH_PATH,
     progress_callback: ProgressCallback | None = None,
+    refresh_artifacts: bool = True,
 ) -> ReviewSaveReport:
     """Save only explicit manual cell edits and still-eligible chatbot fields.
 
     Manual edits are compared with their original DB values while holding the
     workspace lock. If another operation changed a field since the draft was
-    loaded, that field is skipped and reported rather than overwritten.
+    loaded, that field is skipped and reported rather than overwritten. A
+    field whose DB value already equals the edit is neither saved again nor a
+    conflict: a repeated save of the same value succeeds.
     Chatbot suggestions for explicitly edited fields are blocked, preserving
     AI provenance for all untouched suggestions.
+
+    ``refresh_artifacts=False`` skips the review CSV, chatbot batch and report
+    export; the caller must run ``refresh_review_artifacts`` afterwards.
     """
     sync = _load_sync_module()
     path = _database_path(db_path, sync)
@@ -894,6 +1033,10 @@ def save_review_session(
                 accepted: dict[str, object] = {}
                 for field_name, value in raw_edits.items():
                     if field_name not in FIELD_NAMES or field_name == "macro_category":
+                        continue
+                    if _same_baseline_value(current.get(field_name), value) and not (
+                        field_name == "category" and value == "Non-Food"
+                    ):
                         continue
                     if field_name not in baseline or not _same_baseline_value(current.get(field_name), baseline.get(field_name)):
                         conflicts.append((key, field_name))
@@ -969,35 +1112,10 @@ def save_review_session(
             database_changed = manual_fields_saved > 0 or chat_save_attempted or bool(
                 chat_report and chat_report.fields_saved
             )
-            if database_changed:
-                failures: list[str] = []
-                operations = (
-                    (
-                        "review_refresh",
-                        lambda: regenerate_review_csv(
-                            connection,
-                            taxonomy.category_to_macro,
-                            sync.REVIEW_QUEUE_PATH,
-                            sync.OVERRIDE_COLUMNS,
-                        ),
-                    ),
-                    (
-                        "chat_batch_refresh",
-                        lambda: refresh_chat_batch_file(
-                            connection,
-                            taxonomy,
-                            taxonomy.category_to_macro,
-                            output_path,
-                        ),
-                    ),
-                    ("exports", lambda: sync.export_views_for_bi(connection)),
+            if database_changed and refresh_artifacts:
+                artifact_failures = _refresh_artifacts(
+                    connection, sync, taxonomy, output_path, progress_callback
                 )
-                for stage, operation in operations:
-                    try:
-                        _run_stage(progress_callback, stage, operation)
-                    except Exception:
-                        failures.append(stage)
-                artifact_failures = tuple(failures)
             else:
                 artifact_failures = ()
         except Exception:

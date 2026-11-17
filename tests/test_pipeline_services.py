@@ -798,6 +798,99 @@ class PipelineServicesTests(unittest.TestCase):
         ).fetchone(), ("MANUAL", True))
         check.close()
 
+    def _baseline(self):
+        from product_store import FIELD_NAMES
+        con = duckdb.connect(str(self.db_path), read_only=True)
+        row = con.execute(
+            f"SELECT {', '.join(FIELD_NAMES)} FROM nutrition_cache WHERE product_key='000123'"
+        ).fetchone()
+        con.close()
+        return {"000123": dict(zip(FIELD_NAMES, row))}
+
+    def test_saving_a_value_the_database_already_has_is_not_a_conflict(self):
+        # The old app reported "changed after you opened them" when a second
+        # click re-sent an edit that the first click had already saved.
+        self._create_chat_import_db()
+        stale = self._baseline()
+        con = duckdb.connect(str(self.db_path))
+        con.execute("UPDATE nutrition_cache SET salt_100g=0.4 WHERE product_key='000123'")
+        con.close()
+        report = pipeline_services.save_review_session(
+            manual_edits={"000123": {"salt_100g": 0.4}},
+            baselines=stale,
+            db_path=self.db_path,
+            output_path=self.root / "ai_chat_batch.txt",
+            refresh_artifacts=False,
+        )
+        self.assertEqual(report.conflicts, ())
+        self.assertEqual(report.manual_fields_saved, 0)
+        self.assertIsNone(report.database_error)
+
+    def test_cell_save_can_defer_report_files_to_one_refresh(self):
+        self._create_chat_import_db()
+        exports = []
+        review = self.root / "review.csv"
+        output = self.root / "ai_chat_batch.txt"
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sync, "REVIEW_QUEUE_PATH", review))
+            stack.enter_context(patch.object(
+                sync, "export_views_for_bi", side_effect=lambda _con: exports.append("export")
+            ))
+            report = pipeline_services.save_review_session(
+                manual_edits={"000123": {"salt_100g": 0.3}},
+                baselines=self._baseline(),
+                db_path=self.db_path,
+                output_path=output,
+                refresh_artifacts=False,
+            )
+            self.assertEqual(report.manual_fields_saved, 1)
+            self.assertEqual(report.artifact_failures, ())
+            self.assertEqual(exports, [])
+            self.assertFalse(review.exists())
+
+            failures = pipeline_services.refresh_review_artifacts(self.db_path, output)
+
+        self.assertEqual(failures, ())
+        self.assertEqual(exports, ["export"])
+        self.assertTrue(review.is_file())
+
+    def test_refresh_review_artifacts_reports_a_failed_export(self):
+        self._create_chat_import_db()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sync, "REVIEW_QUEUE_PATH", self.root / "review.csv"))
+            stack.enter_context(patch.object(
+                sync, "export_views_for_bi", side_effect=OSError("locked parquet")
+            ))
+            failures = pipeline_services.refresh_review_artifacts(
+                self.db_path, self.root / "ai_chat_batch.txt"
+            )
+        self.assertEqual(failures, ("exports",))
+
+    def test_read_products_returns_all_or_chosen_products_with_provenance(self):
+        self._create_chat_import_db()
+        con = duckdb.connect(str(self.db_path))
+        con.execute(
+            "INSERT INTO nutrition_cache (product_key, sample_name, category, atwater_debug) "
+            "VALUES ('000045', 'Äpfel', NULL, 'CLEARED: kcal does not match macros')"
+        )
+        con.execute(
+            "INSERT INTO product_field_metadata "
+            "(product_key,field_name,source,is_protected) VALUES ('000123','salt_100g','MANUAL',TRUE)"
+        )
+        con.close()
+
+        everything = pipeline_services.read_products(None, self.db_path)
+        self.assertEqual([product["product_key"] for product in everything], ["000045", "000123"])
+        apple, milk = everything
+        self.assertEqual(apple["cleared_reason"], "kcal does not match macros")
+        self.assertIsNone(milk["cleared_reason"])
+        self.assertEqual(milk["field_metadata"]["salt_100g"][:2], ("MANUAL", True))
+        self.assertEqual(milk["kcal_100g"], 100)
+
+        chosen = pipeline_services.read_products(["000123", "missing"], self.db_path)
+        self.assertEqual([product["product_key"] for product in chosen], ["000123"])
+        self.assertEqual(pipeline_services.read_products([], self.db_path), [])
+
 
 if __name__ == "__main__":
     unittest.main()

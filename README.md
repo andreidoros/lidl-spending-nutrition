@@ -85,8 +85,8 @@ flowchart LR
 ```
 
 The Streamlit panel (`app.py`) sits on top of the same services: it starts the
-pipeline, shows progress, and lets you review incomplete products and products whose
-nutrition needs checking.
+pipeline, shows progress, and lets you complete and correct products. Every table cell
+saves itself as soon as you leave it.
 
 ---
 
@@ -166,8 +166,8 @@ stop it.
 Sync is an explicit button in the app. Page loads and reruns never start the pipeline.
 Each Sync checks every available receipt-history page and downloads only receipts
 that are not already stored locally. This lets a later retry recover older receipts
-if an earlier download was interrupted. Review and export-retry actions are disabled
-while Sync is running.
+if an earlier download was interrupted. Editing and export retry wait until Sync has
+finished.
 
 > The first synchronization can take a while: it downloads the receipts, resolves
 > barcodes and queries Open Food Facts for products that are missing nutrition data.
@@ -322,6 +322,30 @@ and are already ignored.
 
 ---
 
+## Using the app
+
+The app has three views:
+
+- **To complete** lists the products that still miss a category or nutrition values.
+  Type a value in any cell; it is saved when you leave the cell, and **Undo** reverts
+  the last change. Products you complete stay in the list, marked *Complete*, until you
+  switch view. **Complete with Groq** and **Use your chatbot** fill the remaining gaps
+  for you; the chatbot route needs no API key (copy the request, paste the answer,
+  check it, save).
+- **All products** shows every product, with a search box. Edits save the same way.
+- **Settings** holds the AI mode and the Groq API key.
+
+Report files (the Parquet exports Power BI reads) refresh a moment after your last
+edit; the line next to the views says when they are up to date. Refresh Power BI to
+see the changes. Choosing **Non-Food** as a category asks for confirmation first,
+because it empties the product's nutrition (its package weight is kept).
+
+The sun/moon button switches between the light and the dark theme. The light theme
+uses `static/app-background.jpg` as its background when that file exists, and a warm
+gradient otherwise.
+
+---
+
 ## Optional AI enrichment
 
 AI enrichment is **off by default**. When enabled, the app can suggest missing
@@ -334,10 +358,11 @@ and package weight are sent — never receipts, prices or purchase history.
    GROQ_API_KEY=your-key
    AI_ENRICHMENT_MODE=categories_and_nutrition
    ```
-3. Open **AI settings** in the app and save.
+3. Open **Settings** in the app and save, or keep the values in `.env`.
 
-The app always shows AI suggestions for review before saving them. You can reject any
-suggestion, and you can run the app entirely without AI.
+Groq runs only when you click **Complete with Groq**, and it fills empty fields only:
+values you typed are never replaced. Every value stays editable in the table, and you
+can run the app entirely without AI.
 
 `ai_eval/` contains an isolated evaluation harness used to compare prompts and models.
 It is not part of the production path.
@@ -373,13 +398,13 @@ Either the file does not exist yet (run a sync) or `Project folder path` points 
 wrong folder. Edit the parameter as described above.
 
 **Some products have no nutrition values.**
-Open **Review products** in the app. Incomplete products are listed with the missing
-fields; you can fill them in manually or let AI suggest values.
+Open **To complete** in the app. Type the missing values in the table, or let Groq or
+your chatbot suggest them.
 
 **A product's calories do not match its protein, carbs and fat.**
-The sync empties its nutrition and lists it in **Review products** as *Incomplete ·
-values cleared*, so Groq or your chatbot can fill it again. If the label really says
-so, type its values and click **Save changes**; values you save are never cleared.
+The sync empties its nutrition and lists it in **To complete** as *Incomplete · values
+cleared*, so Groq or your chatbot can fill it again. If the label really says so, type
+its values; values you type are never cleared.
 
 **The report opens but charts are empty.**
 Refresh the model after changing the parameter, and make sure the slicers are not

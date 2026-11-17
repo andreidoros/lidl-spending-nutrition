@@ -1,53 +1,50 @@
-# Technical, enterprise-style identity for the local control panel.
-# Dark slate surfaces, cobalt accent, 4px corners, sans-serif only.
-# Visual configuration lives here; app.py adds only the few rules that the
-# native theme cannot express (container width, JSON textarea, status badge).
+# Same palette as the Power BI report: cream surfaces, olive accent, warm
+# browns for text, Segoe UI. Light mode sits on the report background photo,
+# dark mode on deep olive. Switch with the sun/moon button in the app header
+# or in the menu (Settings > Theme). app.py adds only what the theme cannot
+# express: the page background, the white panel and the selected view tab.
 
 [client]
 # Hide Streamlit's developer chrome (Deploy, rerun, cache controls).
 toolbarMode = "viewer"
 
+[server]
+# Serves static/app-background.jpg (the report photo) when it is present.
+enableStaticServing = true
+
 [theme]
-base = "dark"
-primaryColor = "#0050AA"
-backgroundColor = "#0F172A"
-secondaryBackgroundColor = "#1E293B"
-textColor = "#F8FAFC"
-borderColor = "#334155"
-linkColor = "#93C5FD"
-linkUnderline = true
-
-blueColor = "#0050AA"
-greenColor = "#3F7A4B"
-yellowColor = "#FACC15"
-orangeColor = "#D97706"
-redColor = "#E60A14"
-grayColor = "#94A3B8"
-
-font = "sans-serif"
-headingFont = "sans-serif"
+font = "'Segoe UI', 'Segoe UI Variable', system-ui, sans-serif"
+headingFont = "'Segoe UI', 'Segoe UI Variable', system-ui, sans-serif"
 headingFontWeights = [600, 600, 600, 600, 600, 600]
-baseFontSize = 16
-
-baseRadius = "4px"
-buttonRadius = "4px"
+baseFontSize = 15
+baseRadius = "10px"
+buttonRadius = "10px"
 showWidgetBorder = true
-showSidebarBorder = false
 
-dataframeBorderColor = "#334155"
-dataframeHeaderBackgroundColor = "#1E293B"
-dataframeHeaderTextColor = "#E2E8F0"
+greenColor = "#5F6B3A"
+orangeColor = "#C2703D"
+redColor = "#B5452F"
+yellowColor = "#D9A441"
+blueColor = "#4F6D7A"
 
-paddingTop = "2rem"
-paddingBottom = "2rem"
+[theme.light]
+primaryColor = "#5F6B3A"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F7EDE0"
+textColor = "#29261D"
+borderColor = "#D9CBB5"
+linkColor = "#5F6B3A"
+dataframeBorderColor = "#EFE6D9"
+dataframeHeaderBackgroundColor = "#F7EDE0"
+dataframeHeaderTextColor = "#7C7566"
 
-chartCategoricalColors = [
-    "#0050AA",
-    "#D97706",
-    "#0F172A",
-    "#475569",
-    "#0284C7",
-    "#E60A14",
-    "#94A3B8",
-    "#CBD5E1",
-]
+[theme.dark]
+primaryColor = "#9DAE6A"
+backgroundColor = "#1F2118"
+secondaryBackgroundColor = "#2B2E21"
+textColor = "#FBF5EC"
+borderColor = "#454836"
+linkColor = "#C9D59B"
+dataframeBorderColor = "#3A3D2D"
+dataframeHeaderBackgroundColor = "#2B2E21"
+dataframeHeaderTextColor = "#CFC6B4"
