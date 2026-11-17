@@ -585,7 +585,7 @@ def _report_files_status() -> None:
 # --------------------------------------------------------------------------
 
 WEIGHT_TABLE_COLUMNS = (
-    "review_status", "sample_name", "category", "sold_as", "times_bought", "spend", "package_weight_g",
+    "review_status", "sample_name", "category", "times_bought", "spend", "package_weight_g",
 )
 
 
@@ -741,7 +741,7 @@ def _render_weights() -> None:
     if not products:
         default = ""
     elif missing:
-        default = "Type the weight in grams: one piece for *per piece*, the whole pack for *package*."
+        default = "Type how many grams one item weighs, as it appears on the receipt: one croissant, one egg carton, one bottle."
     else:
         default = ":green[:material/task_alt:] All done. These products have a weight now."
     with st.container(horizontal=True, vertical_alignment="center", gap="small"):

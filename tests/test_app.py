@@ -344,7 +344,7 @@ class StreamlitAppTests(unittest.TestCase):
             test.session_state["view"] = "weights"
             test.run()
             self.assertFalse(test.exception)
-            self.assertTrue(any("Type the weight in grams" in item.value for item in test.markdown))
+            self.assertTrue(any("Type how many grams one item weighs" in item.value for item in test.markdown))
             self.assertFalse(test.button(key="open_weight_chatbot").disabled)
 
     def test_the_url_names_the_view_by_id_so_a_reload_keeps_it(self):

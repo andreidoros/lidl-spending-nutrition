@@ -334,8 +334,9 @@ The app has four views:
   check it, save).
 - **Missing weight** lists the food you bought whose weight is unknown, most money
   spent first. Without a weight a product is left out of the grams and nutrition
-  totals in the report. Type the weight of one piece (*per piece*, e.g. a croissant)
-  or of the whole pack (*package*); **Use your chatbot** asks for 100 at a time.
+  totals in the report. Type how many grams one item weighs as it appears on the
+  receipt (one croissant, one egg carton, one bottle); **Use your chatbot** asks for
+  100 at a time.
   Loose produce bought by the kilo is weighed on the receipt and never needs one.
 - **All products** shows every product, with a search box. Edits save the same way.
 - **Settings** holds the AI mode and the Groq API key.
