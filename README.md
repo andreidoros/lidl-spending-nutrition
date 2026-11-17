@@ -29,9 +29,11 @@ local cache are never uploaded anywhere and are excluded from this repository.
 - [Configuration](#configuration)
 - [Local data and privacy](#local-data-and-privacy)
 - [Power BI report](#power-bi-report)
+- [Using the app](#using-the-app)
 - [Optional AI enrichment](#optional-ai-enrichment)
 - [Running the tests](#running-the-tests)
 - [Troubleshooting](#troubleshooting)
+- [Credits](#credits)
 
 ---
 
@@ -423,6 +425,17 @@ its values; values you type are never cleared.
 **The report opens but charts are empty.**
 Refresh the model after changing the parameter, and make sure the slicers are not
 filtering out all dates.
+
+---
+
+## Credits
+
+- [lidlplus-api](https://github.com/zsobix/lidlplus-api) by zsobix: the Python client
+  for the Lidl Plus API that this project uses to sign in and download receipts.
+- [Open Food Facts](https://world.openfoodfacts.org/): product and nutrition data,
+  under the Open Database License (ODbL).
+- Background photo by Oliver Sjöberg on
+  [Unsplash](https://unsplash.com/photos/a-wooden-cutting-board-topped-with-lots-of-veggies-g_LcWlVrPbk).
 
 ---
 
