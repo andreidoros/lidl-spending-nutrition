@@ -83,6 +83,9 @@ COMPLETE_STATUS = "Complete"
 VIEWS = ("todo", "weights", "all", "settings")
 EXPORT_DELAY_SECONDS = 1.5
 UNDO_LIMIT = 20
+# One chatbot answer can hold about this many weights; the request takes the
+# products with the most money spent first, the next request the following ones.
+WEIGHT_BATCH_SIZE = 100
 
 DB_PATH = Path(os.environ.get("LIDL_APP_DB_PATH", "lidl_consumption.duckdb"))
 CHAT_BATCH_PATH = Path(os.environ.get("LIDL_APP_CHAT_BATCH_PATH", "ai_chat_batch.txt"))
@@ -143,6 +146,9 @@ html[data-lidl-theme="dark"] [data-testid="stButtonGroup"] button[aria-checked="
 html[data-lidl-theme="dark"] [data-testid="stButtonGroup"] button[aria-checked="true"] * {{
     color: #1F2118 !important; }}
 textarea {{ font-family: Consolas, "Courier New", monospace !important; font-size: .85rem !important; }}
+/* The table's hover toolbar sits above its top edge; keep it off the
+   action buttons in the row above. */
+.st-key-panel [data-testid="stElementContainer"]:has([data-testid="stDataFrame"]) {{ margin-top: 1.6rem; }}
 </style>"""
 
 
@@ -744,7 +750,9 @@ def _render_weights() -> None:
         names = {product["product_key"]: product.get("sample_name") for product in products}
         st.button("Use your chatbot", key="open_weight_chatbot", icon=":material/chat:",
                   disabled=not missing, on_click=_open_dialog,
-                  args=("chatbot_weights", [product["product_key"] for product in missing], names))
+                  args=("chatbot_weights", [product["product_key"] for product in missing[:WEIGHT_BATCH_SIZE]],
+                        names),
+                  help=f"Asks for the {WEIGHT_BATCH_SIZE} products you spent most on; run it again for the next ones.")
     if not products:
         st.success("Every food product you bought has a weight.", icon=":material/task_alt:")
         return
@@ -1098,16 +1106,22 @@ def main() -> None:
         "all": ":material/inventory_2: All products",
         "settings": ":material/settings: Settings",
     }
+    # The view lives in ?view=<id> so the theme toggle's page reload keeps it.
+    # (Streamlit's bind="query-params" would store the label, count included.)
+    if st.session_state.get("view") not in VIEWS:
+        requested = st.query_params.get("view")
+        st.session_state.view = requested if requested in VIEWS else "todo"
     with st.container(horizontal=True, vertical_alignment="center", key="views"):
         view = st.segmented_control(
-            "View", VIEWS, format_func=labels.get, default="todo", required=True,
-            key="view", bind="query-params", on_change=_on_view_change,
-            label_visibility="collapsed",
+            "View", VIEWS, format_func=labels.get, required=True,
+            key="view", on_change=_on_view_change, label_visibility="collapsed",
         ) or "todo"
         st.space("stretch")
         if has_db:
             with st.container(key="statusline", width="content"):
                 _report_files_status()
+    if st.query_params.get("view") != view:
+        st.query_params["view"] = view
 
     with st.container(key="panel"):
         if running:

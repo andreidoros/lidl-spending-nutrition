@@ -324,7 +324,7 @@ and are already ignored.
 
 ## Using the app
 
-The app has three views:
+The app has four views:
 
 - **To complete** lists the products that still miss a category or nutrition values.
   Type a value in any cell; it is saved when you leave the cell, and **Undo** reverts
@@ -332,6 +332,11 @@ The app has three views:
   switch view. **Complete with Groq** and **Use your chatbot** fill the remaining gaps
   for you; the chatbot route needs no API key (copy the request, paste the answer,
   check it, save).
+- **Missing weight** lists the food you bought whose weight is unknown, most money
+  spent first. Without a weight a product is left out of the grams and nutrition
+  totals in the report. Type the weight of one piece (*per piece*, e.g. a croissant)
+  or of the whole pack (*package*); **Use your chatbot** asks for 100 at a time.
+  Loose produce bought by the kilo is weighed on the receipt and never needs one.
 - **All products** shows every product, with a search box. Edits save the same way.
 - **Settings** holds the AI mode and the Groq API key.
 

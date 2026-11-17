@@ -40,7 +40,7 @@ def weight_products():
 
 
 @contextmanager
-def synthetic_app(products=None, *, database=True, ai_configured=True, weights=None):
+def synthetic_app(products=None, *, database=True, ai_configured=True, weights=None, query=None):
     """Run app.py against mocked services and a throwaway workspace."""
     products = synthetic_products() if products is None else products
     weights = [] if weights is None else weights
@@ -85,7 +85,9 @@ def synthetic_app(products=None, *, database=True, ai_configured=True, weights=N
             "weight_batch_text": stack.enter_context(patch.object(
                 pipeline_services, "weight_batch_text", return_value="Estimate the weight...")),
         }
-        test = AppTest.from_file(str(APP_PATH), default_timeout=30).run()
+        test = AppTest.from_file(str(APP_PATH), default_timeout=30)
+        test.query_params.update(query or {})
+        test.run()
         yield test, mocks
 
 
@@ -344,6 +346,15 @@ class StreamlitAppTests(unittest.TestCase):
             self.assertFalse(test.exception)
             self.assertTrue(any("Type the weight in grams" in item.value for item in test.markdown))
             self.assertFalse(test.button(key="open_weight_chatbot").disabled)
+
+    def test_the_url_names_the_view_by_id_so_a_reload_keeps_it(self):
+        # The theme toggle reloads the page; the view must survive a changing count.
+        with synthetic_app(weights=weight_products(), query={"view": "weights"}) as (test, mocks):
+            self.assertFalse(test.exception)
+            self.assertEqual(test.session_state["view"], "weights")
+            self.assertEqual(test.query_params["view"], "weights")
+        with synthetic_app(query={"view": "not-a-view"}) as (test, mocks):
+            self.assertEqual(test.session_state["view"], "todo")
 
     def test_weight_chatbot_asks_only_for_weights(self):
         with synthetic_app(weights=weight_products()) as (test, mocks):
