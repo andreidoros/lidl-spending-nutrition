@@ -585,7 +585,7 @@ def _report_files_status() -> None:
 # --------------------------------------------------------------------------
 
 WEIGHT_TABLE_COLUMNS = (
-    "review_status", "sample_name", "category", "times_bought", "spend", "package_weight_g",
+    "sample_name", "package_weight_g", "category", "times_bought", "spend",
 )
 
 
@@ -731,10 +731,6 @@ def _weight_products() -> list[dict[str, Any]]:
     return pipeline_services.read_weight_worklist(st.session_state.weight_keys, DB_PATH)
 
 
-def _weight_status(product: Mapping[str, Any]) -> str:
-    return COMPLETE_STATUS if product.get("package_weight_g") else "Missing"
-
-
 def _render_weights() -> None:
     products = _weight_products()
     missing = [product for product in products if not product.get("package_weight_g")]
@@ -756,7 +752,7 @@ def _render_weights() -> None:
     if not products:
         st.success("Every food product you bought has a weight.", icon=":material/task_alt:")
         return
-    _render_table("weights", products, columns=WEIGHT_TABLE_COLUMNS, status=_weight_status,
+    _render_table("weights", products, columns=WEIGHT_TABLE_COLUMNS,
                   editable=("package_weight_g",))
     st.caption(
         "Without a weight a product is left out of the grams and nutrition totals in the report. "
