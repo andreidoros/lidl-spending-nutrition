@@ -60,5 +60,3 @@ desktop.ini
 scratch/
 *.tmp
 
-# Report background photo: add locally; its licence is not confirmed for publishing.
-static/app-background.jpg
