@@ -741,7 +741,7 @@ def _render_weights() -> None:
     if not products:
         default = ""
     elif missing:
-        default = "Type how many grams one item weighs, as it appears on the receipt: one croissant, one egg carton, one bottle."
+        default = "Type how many grams one item weighs, as it appears on the receipt."
     else:
         default = ":green[:material/task_alt:] All done. These products have a weight now."
     with st.container(horizontal=True, vertical_alignment="center", gap="small"):
