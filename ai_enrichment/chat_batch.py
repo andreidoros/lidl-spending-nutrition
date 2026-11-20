@@ -34,6 +34,7 @@ _NUTRITION_ISSUES = frozenset({
     "sugars_exceeds_carbs",
     "saturated_fat_exceeds_fat",
     "atwater_mismatch",
+    "fibre_energy_exceeds_kcal",
     "non_food_nutrition",
 })
 
@@ -337,14 +338,58 @@ def _compact_number(text: str) -> float | None:
     return value if math.isfinite(value) else None
 
 
-def parse_compact_answer(text: str, kind: str) -> tuple[dict[str, list[dict[str, object]]], int]:
+# Words a chatbot writes for "I don't know"; they count as an empty value.
+_EMPTY_WORDS = frozenset({"n/a", "na", "null", "none", "-", "--", "?", "unknown", "nan"})
+
+
+def _default_categories() -> frozenset[str]:
+    try:
+        from ai_eval.taxonomy import load_taxonomy
+
+        return frozenset(load_taxonomy().categories)
+    except Exception:  # noqa: BLE001 - parsing still works without the list
+        return frozenset()
+
+
+def _is_text(value: str) -> bool:
+    return bool(value) and _compact_number(value) is None
+
+
+def _copied_name(values: list[str], kind: str, expected: int, categories: frozenset[str]) -> bool:
+    """Whether the first value is the product name the chatbot copied back.
+
+    The answer has ``expected`` values after the key; one more means a copied
+    name. A name is text that is not a category; the category column is the
+    only other text column, which tells the two apart when lines are short.
+    """
+    if not values or not _is_text(values[0]) or values[0] in categories:
+        return False
+    if kind == "weights":
+        return len(values) >= 2
+    if len(values) == expected + 1:
+        return True
+    if len(values) >= 2 and categories:
+        return values[1] in categories
+    return len(values) >= 2 and _is_text(values[1])
+
+
+def parse_compact_answer(
+    text: str,
+    kind: str,
+    categories: Iterable[str] | None = None,
+) -> tuple[dict[str, list[dict[str, object]]], int]:
     """Read "product_key;value;..." lines into the JSON shape of a chat answer.
 
     Explanations, code fences and header lines are ignored, decimal commas
-    are accepted and empty values mean unknown. Returns the payload and the
-    number of lines that looked like data but could not be read.
+    are accepted and empty values (or N/A, null, -, ?) mean unknown. Values
+    are matched to columns by position; a copied product name is recognised
+    by the number of values and by the category list, never by guessing from
+    one cell. A line with more values than the format allows is not read.
+    Returns the payload and the number of lines that looked like data but
+    could not be read.
     """
     columns = COMPACT_COLUMNS[kind]
+    known = frozenset(categories) if categories is not None else _default_categories()
     products: list[dict[str, object]] = []
     unreadable = 0
     for raw in text.splitlines():
@@ -355,16 +400,16 @@ def parse_compact_answer(text: str, kind: str) -> tuple[dict[str, list[dict[str,
         key = parts[0]
         if not key.replace("-", "").replace("_", "").isalnum() or key.lower() == "product_key":
             continue  # prose, headers and code fences
-        values = parts[1:]
-        # The chatbot sometimes copies the product name back after the key.
-        # Only the category column holds text, so a second text column (or,
-        # for weights, any text before the number) is that copied name.
-        if kind == "weights":
-            echoed = len(values) >= 2 and _compact_number(values[0]) is None
-        else:
-            echoed = len(values) >= 2 and values[1] != "" and _compact_number(values[1]) is None
-        if echoed:
+        values = ["" if part.lower() in _EMPTY_WORDS else part for part in parts[1:]]
+        if _copied_name(values, kind, len(columns), known):
             values = values[1:]
+        # A trailing ";" adds empty values; anything else beyond the format
+        # means the columns cannot be matched safely.
+        while len(values) > len(columns) and values[-1] == "":
+            values.pop()
+        if len(values) > len(columns):
+            unreadable += 1
+            continue
         entry: dict[str, object] = {"product_key": key}
         readable = False
         for field, value in zip(columns, values):
@@ -386,7 +431,11 @@ def parse_compact_answer(text: str, kind: str) -> tuple[dict[str, list[dict[str,
     return {"products": products}, unreadable
 
 
-def normalize_chat_answer(text: str, kind: str) -> tuple[str, int]:
+def normalize_chat_answer(
+    text: str,
+    kind: str,
+    categories: Iterable[str] | None = None,
+) -> tuple[str, int]:
     """Return a JSON chat answer for either format, plus unreadable compact lines.
 
     A JSON answer (the copy-and-paste route) is passed through unchanged.
@@ -394,7 +443,7 @@ def normalize_chat_answer(text: str, kind: str) -> tuple[str, int]:
     stripped = text.strip()
     if "{" in stripped and '"products"' in stripped:
         return text, 0
-    payload, unreadable = parse_compact_answer(text, kind)
+    payload, unreadable = parse_compact_answer(text, kind, categories)
     return json.dumps(payload, ensure_ascii=False), unreadable
 
 

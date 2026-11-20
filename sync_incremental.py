@@ -1505,13 +1505,13 @@ def update_nutrition_cache_from_off(
                         WHEN list_has_any(off.categories_tags, ['en:coffees', 'en:teas', 'en:herbal-teas', 'en:coffee-beans', 'en:instant-coffees'])
                             THEN 'Coffee & Tea'
 
-                        -- 4. Water & Soft Drinks
-                        WHEN list_has_any(off.categories_tags, ['en:beverages', 'en:waters', 'en:spring-waters', 'en:mineral-waters', 'en:soft-drinks', 'en:sodas', 'en:fruit-juices', 'en:fruit-nectars', 'en:energy-drinks', 'en:iced-teas', 'en:lemonades'])
-                            THEN 'Water & Soft Drinks'
-
-                        -- 5. Dairy & Eggs
+                        -- 4. Dairy & Eggs (before drinks: kefir and milk are also tagged en:beverages)
                         WHEN list_has_any(off.categories_tags, ['en:dairies', 'en:cheeses', 'en:milks', 'en:yogurts', 'en:butters', 'en:eggs', 'en:creams', 'en:fermented-dairy-products', 'en:cottage-cheeses'])
                             THEN 'Dairy & Eggs'
+
+                        -- 5. Water & Soft Drinks
+                        WHEN list_has_any(off.categories_tags, ['en:beverages', 'en:waters', 'en:spring-waters', 'en:mineral-waters', 'en:soft-drinks', 'en:sodas', 'en:fruit-juices', 'en:fruit-nectars', 'en:energy-drinks', 'en:iced-teas', 'en:lemonades'])
+                            THEN 'Water & Soft Drinks'
 
                         -- 6. Pantry & Groceries (Evaluated before Fresh to prioritize canned & preserved items)
                         WHEN list_has_any(off.categories_tags, ['en:canned-foods', 'en:canned-vegetables', 'en:canned-fishes', 'en:pickles', 'en:canned-fruits', 'en:canned-meals', 'en:preserves', 'en:tinned-foods', 'en:tinned-fishes'])
@@ -1524,7 +1524,7 @@ def update_nutrition_cache_from_off(
                             THEN 'Baking & Cooking Ingredients'
 
                         -- 7. Meat & Fish
-                        WHEN list_has_any(off.categories_tags, ['en:prepared-meats', 'en:sausages', 'en:hams', 'en:salmis', 'en:bacon', 'en:pork-charcuterie', 'en:cold-cuts'])
+                        WHEN list_has_any(off.categories_tags, ['en:prepared-meats', 'en:sausages', 'en:hams', 'en:salamis', 'en:bacon', 'en:pork-charcuterie', 'en:cold-cuts'])
                             THEN 'Processed Meat & Deli'
                         WHEN list_has_any(off.categories_tags, ['en:fresh-fishes', 'en:fishes', 'en:seafood', 'en:salmons', 'en:trouts', 'en:tunas', 'en:fresh-meats', 'en:poultry', 'en:chickens', 'en:turkey', 'en:beef', 'en:pork', 'en:meats'])
                             THEN 'Fresh Meat & Fish'
@@ -1725,13 +1725,13 @@ def update_nutrition_cache_from_off(
                             WHEN list_has_any(s.categories_tags, ['en:coffees', 'en:teas', 'en:herbal-teas', 'en:coffee-beans', 'en:instant-coffees'])
                                 THEN 'Coffee & Tea'
 
-                            -- 4. Water & Soft Drinks
-                            WHEN list_has_any(s.categories_tags, ['en:beverages', 'en:waters', 'en:spring-waters', 'en:mineral-waters', 'en:soft-drinks', 'en:sodas', 'en:fruit-juices', 'en:fruit-nectars', 'en:energy-drinks', 'en:iced-teas', 'en:lemonades'])
-                                THEN 'Water & Soft Drinks'
-
-                            -- 5. Dairy & Eggs
+                            -- 4. Dairy & Eggs (before drinks: kefir and milk are also tagged en:beverages)
                             WHEN list_has_any(s.categories_tags, ['en:dairies', 'en:cheeses', 'en:milks', 'en:yogurts', 'en:butters', 'en:eggs', 'en:creams', 'en:fermented-dairy-products', 'en:cottage-cheeses'])
                                 THEN 'Dairy & Eggs'
+
+                            -- 5. Water & Soft Drinks
+                            WHEN list_has_any(s.categories_tags, ['en:beverages', 'en:waters', 'en:spring-waters', 'en:mineral-waters', 'en:soft-drinks', 'en:sodas', 'en:fruit-juices', 'en:fruit-nectars', 'en:energy-drinks', 'en:iced-teas', 'en:lemonades'])
+                                THEN 'Water & Soft Drinks'
 
                             -- 6. Pantry & Groceries (Evaluated before Fresh to prioritize canned & preserved items)
                             WHEN list_has_any(s.categories_tags, ['en:canned-foods', 'en:canned-vegetables', 'en:canned-fishes', 'en:pickles', 'en:canned-fruits', 'en:canned-meals', 'en:preserves', 'en:tinned-foods', 'en:tinned-fishes'])
@@ -1744,7 +1744,7 @@ def update_nutrition_cache_from_off(
                                 THEN 'Baking & Cooking Ingredients'
 
                             -- 7. Meat & Fish
-                            WHEN list_has_any(s.categories_tags, ['en:prepared-meats', 'en:sausages', 'en:hams', 'en:salmis', 'en:bacon', 'en:pork-charcuterie', 'en:cold-cuts'])
+                            WHEN list_has_any(s.categories_tags, ['en:prepared-meats', 'en:sausages', 'en:hams', 'en:salamis', 'en:bacon', 'en:pork-charcuterie', 'en:cold-cuts'])
                                 THEN 'Processed Meat & Deli'
                             WHEN list_has_any(s.categories_tags, ['en:fresh-fishes', 'en:fishes', 'en:seafood', 'en:salmons', 'en:trouts', 'en:tunas', 'en:fresh-meats', 'en:poultry', 'en:chickens', 'en:turkey', 'en:beef', 'en:pork', 'en:meats'])
                                 THEN 'Fresh Meat & Fish'

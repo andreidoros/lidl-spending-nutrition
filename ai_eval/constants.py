@@ -65,6 +65,9 @@ SATURATED_FAT_TOLERANCE_G = 1.0
 ATWATER_ABS_TOLERANCE_KCAL = 25.0
 ATWATER_REL_TOLERANCE = 0.20
 ALCOHOL_CATEGORY = "Alcoholic Beverages"
+HERBS_AND_SPICES_CATEGORY = "Herbs & Spices"
+# Fibre gives ~2 kcal/g; its energy alone may not exceed kcal_100g plus this.
+FIBRE_ENERGY_TOLERANCE_KCAL = 1.0
 NON_FOOD_CATEGORY = "Non-Food"
 
 NUTRITION_MODES = ("none", "estimate")

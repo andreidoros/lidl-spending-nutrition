@@ -24,6 +24,7 @@ _NUTRITION_ISSUE_CODES = frozenset({
     "sugars_exceeds_carbs",
     "saturated_fat_exceeds_fat",
     "atwater_mismatch",
+    "fibre_energy_exceeds_kcal",
     "non_food_nutrition",
     "nutrition_provided_in_none_mode",
 })

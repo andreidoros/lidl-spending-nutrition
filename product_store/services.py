@@ -67,6 +67,10 @@ def _number(value: object) -> float | None:
     return None if math.isnan(number) else number
 
 
+# Rounding slack for the fibre-energy rule (kcal per 100 g).
+FIBRE_ENERGY_TOLERANCE_KCAL = 1.0
+
+
 def atwater_energy(protein: float, carbs: float, fat: float, fiber: float) -> float:
     """Energy (kcal/100 g) from the EU Atwater factors."""
     return protein * 4.0 + carbs * 4.0 + fat * 9.0 + fiber * 2.0
@@ -102,6 +106,9 @@ def atwater_check(product: Mapping[str, object]) -> str | None:
         return "Sugar is higher than carbs"
     if saturated > fat + 1.0:
         return "Saturated fat is higher than fat"
+    # Fibre gives ~2 kcal/g, so its energy alone cannot exceed the product's.
+    if fiber * 2.0 > kcal + FIBRE_ENERGY_TOLERANCE_KCAL:
+        return "Fibre has more calories than the product"
     if category in ATWATER_EXEMPT_ENERGY:
         return None
     tolerance = max(25.0, kcal * 0.20)

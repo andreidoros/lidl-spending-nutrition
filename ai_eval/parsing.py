@@ -12,6 +12,8 @@ from .constants import (
     ALCOHOL_CATEGORY,
     ATWATER_ABS_TOLERANCE_KCAL,
     ATWATER_REL_TOLERANCE,
+    FIBRE_ENERGY_TOLERANCE_KCAL,
+    HERBS_AND_SPICES_CATEGORY,
     MAX_ABSTAIN_REASON_LENGTH,
     MAX_MACRO_SUM_G,
     NON_FOOD_CATEGORY,
@@ -285,22 +287,36 @@ def _validate_nutrition(
         for field_name, value in nutrition.items()
         if value is not None
     }
-    macro_sum = sum(
-        present.get(field_name, 0.0)
-        for field_name in (
-            "proteins_100g",
-            "carbs_100g",
-            "fat_100g",
-            "fiber_100g",
-            "salt_100g",
-        )
+    # Same rules as product_store.atwater_check (the Sync check): fibre that a
+    # label already counts inside carbs is not added twice, and herbs & spices
+    # (mostly fibre, used by the gram) skip the mass and energy checks.
+    macro_sum = (
+        present.get("proteins_100g", 0.0)
+        + max(present.get("carbs_100g", 0.0), present.get("fiber_100g", 0.0))
+        + present.get("fat_100g", 0.0)
+        + present.get("salt_100g", 0.0)
     )
-    if macro_sum > MAX_MACRO_SUM_G:
+    if category != HERBS_AND_SPICES_CATEGORY and macro_sum > MAX_MACRO_SUM_G:
         issues.append(
             ValidationIssue(
                 "macro_sum_exceeds_105",
-                f"Sum of protein/carbs/fat/fiber/salt is {macro_sum:g} g per "
-                f"100 g, above {MAX_MACRO_SUM_G:g} g.",
+                f"Protein, carbs (or fibre), fat and salt add up to {macro_sum:g} g "
+                f"per 100 g, above {MAX_MACRO_SUM_G:g} g.",
+            )
+        )
+
+    kcal_present = present.get("kcal_100g")
+    fiber_present = present.get("fiber_100g")
+    if (
+        kcal_present is not None
+        and fiber_present is not None
+        and fiber_present * 2.0 > kcal_present + FIBRE_ENERGY_TOLERANCE_KCAL
+    ):
+        issues.append(
+            ValidationIssue(
+                "fibre_energy_exceeds_kcal",
+                f"fiber_100g={fiber_present:g} alone gives {fiber_present * 2.0:g} kcal, "
+                f"more than kcal_100g={kcal_present:g}.",
             )
         )
 
@@ -342,11 +358,17 @@ def _validate_nutrition(
             + fat_value * 9.0
             + fiber * 2.0
         )
+        # A label may count fibre inside carbs or separately; either reading may balance.
+        atwater_fibre_in_carbs = (
+            proteins * 4.0
+            + max(carbs_value - fiber, 0.0) * 4.0
+            + fat_value * 9.0
+            + fiber * 2.0
+        )
         tolerance = max(ATWATER_ABS_TOLERANCE_KCAL, kcal * ATWATER_REL_TOLERANCE)
         if (
-            category != ALCOHOL_CATEGORY
-            and category != NON_FOOD_CATEGORY
-            and abs(kcal - atwater) > tolerance
+            category not in (ALCOHOL_CATEGORY, NON_FOOD_CATEGORY, HERBS_AND_SPICES_CATEGORY)
+            and min(abs(kcal - atwater), abs(kcal - atwater_fibre_in_carbs)) > tolerance
         ):
             issues.append(
                 ValidationIssue(
