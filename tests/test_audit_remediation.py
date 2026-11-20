@@ -163,7 +163,7 @@ class TestAuditRemediation(unittest.TestCase):
         products = {
             "50980": "Rulou cu mere",              # bakery PLU, always whole pieces
             "50535": "Varza alba",                 # loose produce PLU, bought by the kilo
-            "2501007001802": "BUC_Steak de ton",   # variable weight: 180 g in the code
+            "2501007": "BUC_Steak de ton",         # scale-labelled item (25 + item number)
             "4056489000001": "Parm. Reggiano maturat 24l",
             "4056489000002": "Ulei 1L",
         }
@@ -174,7 +174,7 @@ class TestAuditRemediation(unittest.TestCase):
                 [key, name, key == "50980"],  # the old rule had flagged the bakery PLU
             )
         lines = [("50980", 1), ("50980", 2), ("50535", 1.238), ("50535", 1.0),
-                 ("2501007001802", 0.18), ("4056489000001", 1), ("4056489000002", 1)]
+                 ("2501007", 0.18), ("4056489000001", 1), ("4056489000002", 1)]
         for index, (key, quantity) in enumerate(lines):
             con.execute(
                 "INSERT INTO purchases (ticket_id, line_idx, name, quantity, raw_code) VALUES ('t', ?, ?, ?, ?)",
@@ -190,56 +190,103 @@ class TestAuditRemediation(unittest.TestCase):
         }
         self.assertEqual(rows["50980"], (False, None))          # per piece: needs a piece weight
         self.assertEqual(rows["50535"], (True, None))           # weighed, quantity is kg
-        self.assertEqual(rows["2501007001802"], (True, 180.0))  # weighed; the code weight is kept
+        self.assertEqual(rows["2501007"], (True, None))        # weighed; the quantity is the kg
         self.assertEqual(rows["4056489000001"], (False, None))  # "24l" is not 24 kg
         self.assertEqual(rows["4056489000002"], (False, 1000.0))
 
-    def test_variable_weight_25_prefix_inheritance(self):
-        """Test that weighable caseroles (25...) inherit nutrition and category via 7-digit prefix."""
+    def _scale_fixture(self):
         con = duckdb.connect(":memory:")
         sync.init_database(con)
+        # Three packs of one item (2501234) and one pack of another (2509999).
+        packs = [
+            ("2501234005001", 0.500, "AI_ESTIMATED", "AI_ESTIMATED", False, 110.0, "2026-01-01"),
+            ("2501234004508", 0.450, "ENRICHED_MANUAL", "MANUAL_CSV", True, 106.0, "2025-06-01"),
+            ("2501234007129", 0.712, "AI_ESTIMATED", "AI_ESTIMATED", True, 112.0, "2026-03-01"),
+            ("2509999003001", 0.300, "AI_ESTIMATED", "AI_ESTIMATED", True, 200.0, "2026-02-01"),
+        ]
+        for index, (code, quantity, status, source, verified, kcal, cached) in enumerate(packs):
+            con.execute(
+                "INSERT INTO purchases (ticket_id, line_idx, name, quantity, line_total, raw_code, barcode_type, ean) "
+                "VALUES ('t', ?, 'Piept pui', ?, 10, ?, 'INTERNAL_WEIGHTED', NULL)",
+                [index, quantity, code],
+            )
+            con.execute(
+                "INSERT INTO nutrition_cache (product_key, sample_name, category, kcal_100g, package_weight_g, "
+                "match_status, data_source, is_verified, cached_at) VALUES (?, 'Piept pui', 'Fresh Meat & Fish', ?, ?, ?, ?, ?, ?)",
+                [code, kcal, quantity * 1000, status, source, verified, cached],
+            )
+            con.execute(
+                "INSERT INTO product_field_metadata (product_key, field_name, source, is_protected) VALUES (?, 'kcal_100g', ?, FALSE)",
+                [code, "MANUAL" if source == "MANUAL_CSV" else "AI"],
+            )
+            con.execute(
+                "INSERT INTO ai_enrichment_state (product_key, task, status) VALUES (?, 'nutrition', 'succeeded')",
+                [code],
+            )
+        return con
 
-        # 1. Existing verified "parent" item in nutrition_cache with prefix 2501234
-        con.execute("""
-            INSERT INTO nutrition_cache (
-                product_key, sample_name, macro_category, category,
-                kcal_100g, proteins_100g, carbs_100g, sugars_100g, fat_100g, saturated_fat_100g, fiber_100g, salt_100g,
-                is_verified, match_status, data_source
-            ) VALUES (
-                '2501234005001', 'Piept pui dezosat caserola 500g', 'Fresh Food', 'Fresh Meat & Fish',
-                110.0, 23.0, 0.0, 0.0, 2.0, 0.6, 0.0, 0.15,
-                TRUE, 'ENRICHED_MANUAL', 'MANUAL_CSV'
-            );
-        """)
+    def test_scale_codes_are_stored_under_their_7_digit_item(self):
+        self.assertEqual(sync.extract_clean_ean("2501126007129"), ("INTERNAL_WEIGHTED", "2501126"))
+        self.assertEqual(sync.clean_product_key("'2501126007129'"), "2501126")
+        self.assertEqual(sync.clean_product_key("4056489000001"), "4056489000001")
 
-        # 2. New purchase of the same product with a different weight/price: 2501234004508 (450g)
-        con.execute("""
-            INSERT INTO nutrition_cache (
-                product_key, sample_name, macro_category, category,
-                is_verified, match_status, data_source
-            ) VALUES (
-                '2501234004508', 'Piept pui dezosat caserola', NULL, NULL,
-                FALSE, 'NO_GLOBAL_EAN', 'BON_ONLY'
-            );
-        """)
+    def test_migration_merges_packs_and_manual_values_win(self):
+        con = self._scale_fixture()
+        report = sync.migrate_variable_weight_keys(con)
+        self.assertEqual(report, {"lines": 4, "old_keys": 4, "products": 2})
 
+        products = dict(con.execute("SELECT product_key, kcal_100g FROM nutrition_cache").fetchall())
+        self.assertEqual(products, {"2501234": 106.0, "2509999": 200.0})  # the manual 106 wins
+        row = con.execute(
+            "SELECT ean, package_weight_g, is_weighed_default FROM nutrition_cache WHERE product_key = '2501234'"
+        ).fetchone()
+        self.assertEqual(row, ("2501234", None, True))
+
+        metadata = con.execute("SELECT product_key, source FROM product_field_metadata ORDER BY 1").fetchall()
+        self.assertEqual(metadata, [("2501234", "MANUAL"), ("2509999", "AI")])
+        states = con.execute("SELECT product_key FROM ai_enrichment_state ORDER BY 1").fetchall()
+        self.assertEqual(states, [("2501234",), ("2509999",)])
+
+        lines = con.execute("SELECT ean, quantity FROM purchases ORDER BY line_idx").fetchall()
+        self.assertEqual([ean for ean, _ in lines], ["2501234", "2501234", "2501234", "2509999"])
+        self.assertEqual(float(lines[2][1]), 0.712)  # the pack weight stays on the receipt line
+
+        # A second sync finds nothing to move.
+        self.assertEqual(sync.migrate_variable_weight_keys(con), {"lines": 0, "old_keys": 0, "products": 0})
+
+    def test_without_manual_values_verified_then_newest_wins(self):
+        con = self._scale_fixture()
+        con.execute("DELETE FROM nutrition_cache WHERE product_key = '2501234004508'")
+        con.execute("DELETE FROM product_field_metadata WHERE product_key = '2501234004508'")
+        sync.migrate_variable_weight_keys(con)
+        kcal = con.execute("SELECT kcal_100g FROM nutrition_cache WHERE product_key = '2501234'").fetchone()[0]
+        self.assertEqual(kcal, 112.0)  # verified beats the newer unverified 110
+
+    def test_an_existing_item_row_joins_the_merge(self):
+        con = self._scale_fixture()
+        con.execute(
+            "INSERT INTO nutrition_cache (product_key, sample_name, kcal_100g, match_status, is_verified, cached_at) "
+            "VALUES ('2509999', 'Piept pui', 150.0, 'AI_ESTIMATED', FALSE, '2020-01-01')"
+        )
+        sync.migrate_variable_weight_keys(con)
+        kcal = con.execute("SELECT kcal_100g FROM nutrition_cache WHERE product_key = '2509999'").fetchone()[0]
+        self.assertEqual(kcal, 200.0)
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM nutrition_cache").fetchone()[0], 2)
+
+    def test_merged_scale_item_is_weighed_by_receipt_quantity(self):
+        con = self._scale_fixture()
+        sync.migrate_variable_weight_keys(con)
         sync.compute_weights_and_quantities(con)
+        row = con.execute(
+            "SELECT is_weighed_default, package_weight_g FROM nutrition_cache WHERE product_key = '2501234'"
+        ).fetchone()
+        self.assertEqual(row, (True, None))
 
-        row = con.execute("""
-            SELECT package_weight_g, macro_category, category, kcal_100g, proteins_100g, match_status, data_source, is_verified
-            FROM nutrition_cache
-            WHERE product_key = '2501234004508'
-        """).fetchone()
-
-        self.assertIsNotNone(row)
-        self.assertEqual(row[0], 450.0)  # Decoded piece weight from digits 8-12
-        self.assertEqual(row[1], "Fresh Food")
-        self.assertEqual(row[2], "Fresh Meat & Fish")
-        self.assertEqual(row[3], 110.0)
-        self.assertEqual(row[4], 23.0)
-        self.assertEqual(row[5], "INHERITED_PREFIX")
-        self.assertEqual(row[6], "PREFIX_INHERIT")
-        self.assertTrue(row[7])
+    def test_init_database_runs_the_migration(self):
+        con = self._scale_fixture()
+        sync.init_database(con)
+        keys = {key for (key,) in con.execute("SELECT product_key FROM nutrition_cache").fetchall()}
+        self.assertEqual(keys, {"2501234", "2509999"})
 
     @patch("sync_incremental.requests.Session")
     def test_fetch_off_batch_api_success(self, mock_session_cls):

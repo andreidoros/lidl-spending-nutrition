@@ -16,6 +16,8 @@ import requests
 import unicodedata
 from lidlplus_api import LidlPlusApi
 
+from product_store.schema import canonical_product_key
+
 # Ensure UTF-8 console output on Windows terminals
 if sys.platform == "win32":
     try:
@@ -48,7 +50,9 @@ SEED_CATALOG_PATH = COUNTRY_CATALOG_DIR / "catalog_seed.csv"
 SPICE_RULES_PATH = COUNTRY_CATALOG_DIR / "spice_rules.json"
 HERBS_AND_SPICES = "Herbs & Spices"
 # Lidl variable-weight barcodes: 13 digits starting with 25, weight in digits 8-12.
-VARIABLE_WEIGHT_KEY_SQL = "({column} LIKE '25%' AND LENGTH({column}) = 13)"
+# Lidl scale codes (25 + item + weight + check digit) are stored under their
+# 7-digit item key, see product_store.schema.canonical_product_key.
+VARIABLE_WEIGHT_KEY_SQL = "({column} LIKE '25%' AND LENGTH({column}) = 7)"
 # A litre value above this is not a food package ("24l" = 24 months, not 24 L).
 MAX_PARSED_LITRES = 10.0
 
@@ -585,7 +589,7 @@ def clean_product_key(raw_key: str | None) -> str:
         cleaned_key = cleaned_key[1:].strip()
     if (cleaned_key.startswith('"') and cleaned_key.endswith('"')) or (cleaned_key.startswith("'") and cleaned_key.endswith("'")):
         cleaned_key = cleaned_key[1:-1].strip()
-    return cleaned_key
+    return canonical_product_key(cleaned_key)
 
 
 def extract_clean_ean(raw_code: str) -> tuple[str, str | None]:
@@ -612,6 +616,10 @@ def extract_clean_ean(raw_code: str) -> tuple[str, str | None]:
             return "GLOBAL_EAN", candidate_13
         return "OTHER", None
 
+    if len(code_clean) == 13 and code_clean.startswith("25"):
+        # Scale label: the product is the 7-digit item part, the weight is
+        # already the receipt quantity.
+        return "INTERNAL_WEIGHTED", canonical_product_key(code_clean)
     if len(code_clean) == 13 and re.match(r"^2[0-9]", code_clean):
         return "INTERNAL_WEIGHTED", None
     if len(code_clean) in (8, 12, 13):
@@ -733,6 +741,120 @@ def init_database(con: duckdb.DuckDBPyConnection) -> None:
     # field-level protected values can be preserved during this sync.
     from product_store import create_schema
     create_schema(con)
+    migrate_variable_weight_keys(con)
+
+
+_SCALE_CODE_SQL = "({column} LIKE '25%' AND LENGTH({column}) = 13 AND regexp_full_match({column}, '[0-9]+'))"
+
+
+def migrate_variable_weight_keys(con: duckdb.DuckDBPyConnection) -> dict[str, int]:
+    """Move products stored under full 13-digit scale codes to their 7-digit item key.
+
+    Each pack of loose meat or cheese used to become its own product. Rows
+    that share the 7-digit item part are merged into one: manual values win
+    over verified ones, verified over the rest, and the most recent wins a
+    tie. The winner's field provenance and AI state move with it. Receipt
+    lines keep their quantity (the weight); only their product key changes.
+    Does nothing once no 13-digit scale code is left.
+    """
+    cache_rows = con.execute(f"""
+        SELECT product_key FROM nutrition_cache
+        WHERE {_SCALE_CODE_SQL.format(column="product_key")}
+    """).fetchall()
+    stale_lines_row = con.execute(f"""
+        SELECT COUNT(*) FROM purchases
+        WHERE {_SCALE_CODE_SQL.format(column="TRIM(raw_code)")}
+          AND ean IS DISTINCT FROM SUBSTRING(TRIM(raw_code), 1, 7)
+    """).fetchone()
+    stale_lines = int(stale_lines_row[0]) if stale_lines_row else 0
+    if not cache_rows and not stale_lines:
+        return {"lines": 0, "old_keys": 0, "products": 0}
+
+    con.begin()
+    try:
+        con.execute(f"""
+            UPDATE purchases
+            SET ean = SUBSTRING(TRIM(raw_code), 1, 7), barcode_type = 'INTERNAL_WEIGHTED'
+            WHERE {_SCALE_CODE_SQL.format(column="TRIM(raw_code)")}
+              AND ean IS DISTINCT FROM SUBSTRING(TRIM(raw_code), 1, 7)
+        """)
+
+        # Rank every row of each item: the 13-digit rows and, if present,
+        # an existing 7-digit row.
+        ranked = con.execute(f"""
+            WITH candidates AS (
+                SELECT
+                    c.product_key,
+                    SUBSTRING(c.product_key, 1, 7) AS item_key,
+                    (
+                        EXISTS (
+                            SELECT 1 FROM product_field_metadata m
+                            WHERE m.product_key = c.product_key
+                              AND (m.is_protected OR m.source = 'MANUAL')
+                        )
+                        OR COALESCE(c.match_status, '') IN ('ENRICHED_MANUAL', 'MANUAL_CORRECTED')
+                        OR COALESCE(c.data_source, '') = 'MANUAL_CSV'
+                    ) AS is_manual,
+                    COALESCE(c.is_verified, FALSE) AS is_verified,
+                    c.cached_at
+                FROM nutrition_cache c
+                WHERE {_SCALE_CODE_SQL.format(column="c.product_key")}
+                   OR (
+                       {VARIABLE_WEIGHT_KEY_SQL.format(column="c.product_key")}
+                       AND c.product_key IN (
+                           SELECT SUBSTRING(product_key, 1, 7) FROM nutrition_cache
+                           WHERE {_SCALE_CODE_SQL.format(column="product_key")}
+                       )
+                   )
+            )
+            SELECT item_key, product_key,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY item_key
+                       ORDER BY is_manual DESC, is_verified DESC, cached_at DESC NULLS LAST, product_key DESC
+                   ) AS rank
+            FROM candidates
+            ORDER BY item_key, rank
+        """).fetchall()
+
+        winners: dict[str, str] = {}
+        losers: list[str] = []
+        for item_key, product_key, rank in ranked:
+            if rank == 1:
+                winners[item_key] = product_key
+            else:
+                losers.append(product_key)
+
+        for table in ("product_field_metadata", "ai_enrichment_state", "nutrition_cache"):
+            if losers:
+                con.execute(f"DELETE FROM {table} WHERE product_key IN (SELECT UNNEST(?))", [losers])
+
+        for item_key, winner in winners.items():
+            if winner == item_key:
+                continue
+            # The pack weight in a 13-digit code describes one pack, not the product.
+            con.execute(
+                "DELETE FROM product_field_metadata WHERE product_key = ? AND field_name = 'package_weight_g'",
+                [winner],
+            )
+            for table in ("product_field_metadata", "ai_enrichment_state"):
+                con.execute(f"UPDATE {table} SET product_key = ? WHERE product_key = ?", [item_key, winner])
+            con.execute(
+                """UPDATE nutrition_cache
+                   SET product_key = ?, ean = ?, package_weight_g = NULL, is_weighed_default = TRUE
+                   WHERE product_key = ?""",
+                [item_key, item_key, winner],
+            )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+
+    old_keys = len(cache_rows)
+    print(
+        f"[+] Scale codes: {old_keys} product rows merged into {len(winners)} products "
+        f"({stale_lines} receipt lines now use the 7-digit item key)."
+    )
+    return {"lines": stale_lines, "old_keys": old_keys, "products": len(winners)}
 
 
 def migrate_legacy_55_barcodes(con: duckdb.DuckDBPyConnection) -> None:
@@ -2739,81 +2861,21 @@ def compute_weights_and_quantities(con: duckdb.DuckDBPyConnection) -> None:
         );
     """)
 
-    # Barcodes starting with '25' carry the piece weight in digits 8-12; it
-    # stays as information (the receipt quantity already holds the kilograms).
-    con.execute("""
-        UPDATE nutrition_cache
-        SET package_weight_g = CAST(SUBSTRING(product_key, 8, 5) AS DOUBLE)
-        WHERE product_key LIKE '25%'
-          AND LENGTH(product_key) = 13
-          AND NOT EXISTS (
-              SELECT 1 FROM product_field_metadata metadata
-              WHERE metadata.product_key = nutrition_cache.product_key
-                AND metadata.field_name = 'package_weight_g'
-                AND metadata.is_protected
-          );
-    """)
-
-    # Inherit category and nutrition for variable-weight items (prefix 25...) based on first 7 characters
     con.execute("CREATE TABLE IF NOT EXISTS catalog_overrides (product_key VARCHAR PRIMARY KEY);")
     for col in OVERRIDE_NUM_COLUMNS:
         con.execute(f"ALTER TABLE catalog_overrides ADD COLUMN IF NOT EXISTS {col} DOUBLE;")
     for col in OVERRIDE_TEXT_COLUMNS:
         con.execute(f"ALTER TABLE catalog_overrides ADD COLUMN IF NOT EXISTS {col} VARCHAR;")
 
-    con.execute("""
-        WITH prefix_sources AS (
-            SELECT 
-                SUBSTRING(product_key, 1, 7) AS pfx7,
-                macro_category, category, kcal_100g, proteins_100g, carbs_100g, sugars_100g,
-                fat_100g, saturated_fat_100g, fiber_100g, salt_100g
-            FROM (
-                SELECT product_key, macro_category, category, kcal_100g, proteins_100g, carbs_100g, sugars_100g,
-                       fat_100g, saturated_fat_100g, fiber_100g, salt_100g, 1 AS prio
-                FROM catalog_overrides
-                WHERE macro_category IS NOT NULL
-                UNION ALL
-                SELECT product_key, macro_category, category, kcal_100g, proteins_100g, carbs_100g, sugars_100g,
-                       fat_100g, saturated_fat_100g, fiber_100g, salt_100g, 2 AS prio
-                FROM nutrition_cache
-                WHERE is_verified = TRUE AND macro_category IS NOT NULL
-            ) combined
-            QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY SUBSTRING(product_key, 1, 7)
-                ORDER BY prio ASC, (kcal_100g IS NOT NULL) DESC
-            ) = 1
-        )
-        UPDATE nutrition_cache
-        SET
-            macro_category     = COALESCE(nutrition_cache.macro_category, s.macro_category),
-            category           = COALESCE(nutrition_cache.category, s.category),
-            kcal_100g          = COALESCE(nutrition_cache.kcal_100g, s.kcal_100g),
-            proteins_100g      = COALESCE(nutrition_cache.proteins_100g, s.proteins_100g),
-            carbs_100g         = COALESCE(nutrition_cache.carbs_100g, s.carbs_100g),
-            sugars_100g        = COALESCE(nutrition_cache.sugars_100g, s.sugars_100g),
-            fat_100g           = COALESCE(nutrition_cache.fat_100g, s.fat_100g),
-            saturated_fat_100g = COALESCE(nutrition_cache.saturated_fat_100g, s.saturated_fat_100g),
-            fiber_100g         = COALESCE(nutrition_cache.fiber_100g, s.fiber_100g),
-            salt_100g          = COALESCE(nutrition_cache.salt_100g, s.salt_100g),
-            match_status       = CASE WHEN s.macro_category IS NOT NULL THEN 'INHERITED_PREFIX' ELSE nutrition_cache.match_status END,
-            data_source        = CASE WHEN s.macro_category IS NOT NULL THEN 'PREFIX_INHERIT' ELSE nutrition_cache.data_source END,
-            is_verified        = CASE WHEN s.macro_category IS NOT NULL AND s.kcal_100g IS NOT NULL THEN TRUE ELSE nutrition_cache.is_verified END
-        FROM prefix_sources s
-        WHERE nutrition_cache.product_key LIKE '25%' 
-          AND LENGTH(nutrition_cache.product_key) = 13
-          AND SUBSTRING(nutrition_cache.product_key, 1, 7) = s.pfx7
-          AND COALESCE(nutrition_cache.category, '') != 'Non-Food'
-          AND (nutrition_cache.macro_category IS NULL OR nutrition_cache.kcal_100g IS NULL);
-    """)
 
-    # Loose produce sold by the kilo has no package weight. Short PLU codes
-    # (50...) sold only in whole pieces are no longer treated as weighed: a
-    # croissant bought twice is two pieces, not two kilograms.
-    con.execute(f"""
+    # Loose produce and scale-labelled packs are weighed: the receipt
+    # quantity is the kilograms, so no package weight applies. Short PLU codes
+    # (50...) sold only in whole pieces are not weighed: a croissant bought
+    # twice is two pieces, not two kilograms.
+    con.execute("""
         UPDATE nutrition_cache
         SET package_weight_g = NULL
         WHERE is_weighed_default
-          AND NOT ({VARIABLE_WEIGHT_KEY_SQL.format(column="product_key")})
           AND NOT EXISTS (
               SELECT 1 FROM product_field_metadata metadata
               WHERE metadata.product_key = nutrition_cache.product_key

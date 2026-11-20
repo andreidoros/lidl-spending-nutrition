@@ -347,7 +347,9 @@ The app has four views:
   spent first. Without a weight a product is left out of the grams and nutrition
   totals in the report. Type how many grams one item weighs, as it appears on the
   receipt; **Use your chatbot** asks for 100 at a time.
-  Loose produce bought by the kilo is weighed on the receipt and never needs one.
+  Loose produce bought by the kilo is weighed on the receipt and never needs one,
+  and neither do packs with a scale label (meat, fish, cheese): every pack of
+  one item is listed once, as one product.
 - **All products** shows every product, with a search box. Edits save the same way.
 - **Settings** holds the AI mode and the Groq API key.
 

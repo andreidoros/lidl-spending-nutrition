@@ -99,7 +99,7 @@ class TestBarcodeExtract(unittest.TestCase):
         # Internal weighted barcode (starts with 2)
         b_type, ean = extract_clean_ean("2508941003817")
         self.assertEqual(b_type, "INTERNAL_WEIGHTED")
-        self.assertIsNone(ean)
+        self.assertEqual(ean, "2508941")  # Lidl scale label: the 7-digit item
 
         b_type, ean = extract_clean_ean("2012345678901")
         self.assertEqual(b_type, "INTERNAL_WEIGHTED")

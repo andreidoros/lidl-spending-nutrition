@@ -51,6 +51,19 @@ SOURCE_OFF = "OFF"
 SOURCE_AI = "AI"
 SOURCE_LEGACY_UNKNOWN = "LEGACY_UNKNOWN"
 
+def canonical_product_key(key: str) -> str:
+    """The product identity for a key: a Lidl scale code keeps only its item part.
+
+    A 13-digit code starting with ``25`` is ``25`` + a 5-digit item number +
+    the 5-digit weight + a check digit. The weight differs on every pack, so
+    the product is the first 7 digits (``2501126007129`` -> ``2501126``).
+    Every other key is returned unchanged.
+    """
+    if len(key) == 13 and key.startswith("25") and key.isdigit():
+        return key[:7]
+    return key
+
+
 SOURCE_VALUES: tuple[str, ...] = (
     SOURCE_MANUAL,
     SOURCE_SEED,

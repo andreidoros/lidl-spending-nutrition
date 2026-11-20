@@ -377,7 +377,7 @@ class PipelineServicesTests(unittest.TestCase):
                    (product_key, sample_name, macro_category, category, kcal_100g,
                     proteins_100g, carbs_100g, sugars_100g, fat_100g,
                     saturated_fat_100g, salt_100g, match_status)
-                   VALUES ('2501234004508', 'Product', 'Fresh Food', 'Dairy & Eggs',
+                   VALUES ('2501234', 'Product', 'Fresh Food', 'Dairy & Eggs',
                            100, 3, 5, 1, 2, 1, 0.5, 'TEST')"""
             )
         finally:
@@ -388,7 +388,7 @@ class PipelineServicesTests(unittest.TestCase):
         sync.write_csv_records(
             override_path,
             [{
-                "product_key": "2501234004508",
+                "product_key": "2501234",
                 "macro_category": "Fresh Food",
                 "category": "Dairy & Eggs",
                 "kcal_100g": "100",
@@ -410,7 +410,7 @@ class PipelineServicesTests(unittest.TestCase):
                     connection.close()
 
                 pipeline_services.save_review_fields(
-                    "2501234004508",
+                    "2501234",
                     {"category": None, "kcal_100g": None, "salt_100g": None},
                     self.db_path,
                 )
@@ -425,7 +425,7 @@ class PipelineServicesTests(unittest.TestCase):
                     sync.apply_nutrition_overrides(connection, quiet=True)
                     mirror = connection.execute(
                         """SELECT macro_category, category, kcal_100g, salt_100g
-                           FROM catalog_overrides WHERE product_key='2501234004508'"""
+                           FROM catalog_overrides WHERE product_key='2501234'"""
                     ).fetchone()
                     self.assertEqual(mirror, (None, None, None, None))
                     prefix_sources = connection.execute(

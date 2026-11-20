@@ -34,6 +34,7 @@ from .schema import (
     SOURCE_MANUAL,
     SOURCE_OFF,
     SOURCE_SEED,
+    canonical_product_key,
     create_schema,
 )
 
@@ -145,8 +146,11 @@ def _clean_text(value: object) -> str:
 
 
 def _clean_product_key(value: object) -> str:
-    """Return a trimmed product key, or ``""`` when the cell is empty."""
-    return _clean_text(value)
+    """Return a trimmed product key, or ``""`` when the cell is empty.
+
+    A legacy 13-digit scale code (``25...``) becomes its 7-digit item key.
+    """
+    return canonical_product_key(_clean_text(value))
 
 
 def _parse_field_values(row: dict[str, object]) -> dict[str, object]:
