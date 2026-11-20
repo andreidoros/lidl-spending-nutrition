@@ -52,6 +52,22 @@ VARIABLE_WEIGHT_KEY_SQL = "({column} LIKE '25%' AND LENGTH({column}) = 13)"
 # A litre value above this is not a food package ("24l" = 24 months, not 24 L).
 MAX_PARSED_LITRES = 10.0
 
+# Open Food Facts production servers only. openfoodfacts.net is the staging
+# server: an answer there ("not found") says nothing about the real database.
+OFF_PRODUCT_URLS = (
+    "https://world.openfoodfacts.org/api/v3/product/{code}.json",
+    "https://{country}.openfoodfacts.org/api/v3/product/{code}.json",
+)
+OFF_SEARCH_URLS = (
+    "https://{country}.openfoodfacts.org/api/v2/search",
+    "https://world.openfoodfacts.org/api/v2/search",
+)
+# A Retry-After header is obeyed up to this many seconds, never longer.
+MAX_RETRY_AFTER_SECONDS = 60.0
+# One-time re-query of products marked not found while the staging server
+# was asked first (fixed November 2026).
+OFF_STAGING_REQUERY_MIGRATION = "2026-11-off-production-requery"
+
 
 @dataclass(frozen=True)
 class ReceiptSyncResult:
@@ -980,11 +996,7 @@ def fetch_off_product_api(ean: str, session: requests.Session | None = None) -> 
         return None
 
     country_sub = LIDL_COUNTRY.lower() if LIDL_COUNTRY else "ro"
-    urls_to_try = [
-        f"https://world.openfoodfacts.net/api/v3/product/{clean_code}.json",
-        f"https://world.openfoodfacts.org/api/v3/product/{clean_code}.json",
-        f"https://{country_sub}.openfoodfacts.org/api/v3/product/{clean_code}.json"
-    ]
+    urls_to_try = [url.format(code=clean_code, country=country_sub) for url in OFF_PRODUCT_URLS]
     params = {
         "fields": "code,product_name,product_name_ro,product_name_en,brands,nutriments,nutriscore_grade,nutriscore_score,nova_group,categories_tags"
     }
@@ -1006,7 +1018,7 @@ def fetch_off_product_api(ean: str, session: requests.Session | None = None) -> 
                     sleep_sec = backoff
                     if isinstance(retry_header, (str, int, float)):
                         try:
-                            sleep_sec = max(1.0, float(retry_header))
+                            sleep_sec = min(MAX_RETRY_AFTER_SECONDS, max(1.0, float(retry_header)))
                         except (ValueError, TypeError):
                             sleep_sec = backoff
                     time.sleep(sleep_sec)
@@ -1067,12 +1079,7 @@ def fetch_off_batch_api(eans: list[str], session: requests.Session | None = None
         return []
 
     country_sub = LIDL_COUNTRY.lower() if LIDL_COUNTRY else "ro"
-    urls_to_try = [
-        "https://world.openfoodfacts.net/api/v2/search",
-        f"https://{country_sub}.openfoodfacts.net/api/v2/search",
-        f"https://{country_sub}.openfoodfacts.org/api/v2/search",
-        "https://world.openfoodfacts.org/api/v2/search"
-    ]
+    urls_to_try = [url.format(country=country_sub) for url in OFF_SEARCH_URLS]
 
     http_client = session if session is not None else requests
     headers = {
@@ -1094,7 +1101,7 @@ def fetch_off_batch_api(eans: list[str], session: requests.Session | None = None
                     sleep_sec = backoff
                     if isinstance(retry_header, (str, int, float)):
                         try:
-                            sleep_sec = max(1.0, float(retry_header))
+                            sleep_sec = min(MAX_RETRY_AFTER_SECONDS, max(1.0, float(retry_header)))
                         except (ValueError, TypeError):
                             sleep_sec = backoff
                     time.sleep(sleep_sec)
@@ -1143,12 +1150,55 @@ def fetch_off_batch_api(eans: list[str], session: requests.Session | None = None
     return None
 
 
+def requery_staging_not_found(con: duckdb.DuckDBPyConnection) -> int:
+    """Once per database: ask Open Food Facts again about products marked not found.
+
+    Earlier versions asked the OFF staging server first and trusted its "not
+    found". Moving ``cached_at`` into the past lets the normal TTL re-query
+    pick these products up in this sync. Returns how many were marked.
+    """
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            migration_id VARCHAR PRIMARY KEY,
+            applied_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            details      VARCHAR
+        );
+    """)
+    done = con.execute(
+        "SELECT 1 FROM schema_migrations WHERE migration_id = ?", [OFF_STAGING_REQUERY_MIGRATION]
+    ).fetchone()
+    if done:
+        return 0
+    condition = """
+        match_status = 'NOT_FOUND_OFF'
+        AND is_verified = FALSE
+        AND COALESCE(data_source, '') != 'MANUAL_CSV'
+    """
+    con.begin()
+    try:
+        marked_row = con.execute(f"SELECT COUNT(*) FROM nutrition_cache WHERE {condition}").fetchone()
+        marked = int(marked_row[0]) if marked_row else 0
+        con.execute(f"UPDATE nutrition_cache SET cached_at = TIMESTAMP '2000-01-01' WHERE {condition}")
+        con.execute(
+            "INSERT INTO schema_migrations (migration_id, details) VALUES (?, ?)",
+            [OFF_STAGING_REQUERY_MIGRATION, f"{marked} not-found products queued for a production re-query"],
+        )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    if marked:
+        print(f"[i] {marked} products marked not found will be asked again on the real Open Food Facts server.")
+    return marked
+
+
 def update_nutrition_cache_from_off(
     con: duckdb.DuckDBPyConnection,
     progress_callback: Callable[[dict[str, object]], None] | None = None,
 ) -> None:
     """Enrich new global EAN codes using local Open Food Facts Parquet dump or Live REST API v2."""
     print("\n--- STEP 4: Matching New Products with Open Food Facts ---")
+    requery_staging_not_found(con)
 
     # 1. Register new non-EAN codes into cache as BON_ONLY
     con.execute("""

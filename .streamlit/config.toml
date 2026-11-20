@@ -9,8 +9,15 @@
 toolbarMode = "viewer"
 
 [server]
+# Only this computer can open the app, even when it is started without
+# run.bat. The app shows your spending and can edit the database.
+address = "127.0.0.1"
 # Serves static/app-background.jpg (the report photo) when it is present.
 enableStaticServing = true
+
+[browser]
+# Do not send usage statistics to Streamlit.
+gatherUsageStats = false
 
 [theme]
 font = "'Segoe UI', 'Segoe UI Variable', system-ui, sans-serif"

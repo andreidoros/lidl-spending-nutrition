@@ -18,6 +18,7 @@ zstandard>=0.22.0
 # Automated browser authentication & redirect interception
 playwright>=1.40.0
 
-# Local product-review control panel
-streamlit>=1.38.0,<2.0.0
+# Local product-review control panel. The app uses st.components.v2, light
+# and dark theme sections and dialog on_dismiss; tested on 1.66.
+streamlit>=1.66.0,<2.0.0
 pandas>=2.0.0

@@ -40,7 +40,8 @@ if not exist ".venv\Scripts\python.exe" (
 
 :: 3. Fast Dependency Check - Install only if missing
 echo [*] Checking Python dependencies...
-.\.venv\Scripts\python.exe -c "import duckdb, requests, lidlplus_api, zstandard, playwright, httpx, pandas, streamlit" >nul 2>&1
+:: An installed but too old Streamlit counts as missing, so pip upgrades it.
+.\.venv\Scripts\python.exe -c "import sys, duckdb, requests, lidlplus_api, zstandard, playwright, httpx, pandas, streamlit; sys.exit(0 if tuple(int(p) for p in streamlit.__version__.split('.')[:2]) >= (1, 66) else 1)" >nul 2>&1
 if errorlevel 1 (
     echo [*] Missing dependencies detected. Installing from requirements.txt...
     .\.venv\Scripts\python.exe -m pip install --upgrade pip --quiet

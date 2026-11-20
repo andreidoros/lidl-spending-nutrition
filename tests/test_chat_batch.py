@@ -571,7 +571,7 @@ Let me know if you need more."""
         self.assertEqual(payload["products"], [
             {"product_key": "50980", "package_weight_g": 90.0},
             {"product_key": "4056489000001", "package_weight_g": 500.0},
-            {"product_key": "4056489000002", "package_weight_g": 0.75},
+            {"product_key": "4056489000002", "package_weight_g": 750.0},
         ])
         # "4056489000003;" is an honest "unknown"; only the prose value is unreadable.
         self.assertEqual(unreadable, 2)

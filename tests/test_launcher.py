@@ -104,7 +104,14 @@ class WindowsLauncherContractTests(unittest.TestCase):
 
     def test_dependencies_and_python_minimum_are_checked(self):
         self.assertIn("(3, 10)", self.launcher)
-        self.assertIn("import duckdb, requests, lidlplus_api, zstandard, playwright, httpx, pandas, streamlit", self.launcher)
+        self.assertIn("import sys, duckdb, requests, lidlplus_api, zstandard, playwright, httpx, pandas, streamlit;", self.launcher)
+
+    def test_too_old_streamlit_triggers_the_install(self):
+        line = next(row for row in self.launcher.splitlines() if "import sys, duckdb" in row)
+        self.assertIn(">= (1, 66)", line)
+        code = re.search(r'-c "([^"]+)"', line).group(1)
+        result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_readme_documents_local_only_explicit_sync_startup(self):
         self.assertIn("http://127.0.0.1:8501", self.readme)

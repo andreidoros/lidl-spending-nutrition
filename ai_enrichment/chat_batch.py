@@ -322,12 +322,16 @@ def build_compact_chat_batch(
 
 
 def _compact_number(text: str) -> float | None:
+    """A number from a compact answer; "0,75 kg" is 750 (grams)."""
     cleaned = text.strip().replace(" ", "").replace(",", ".")
-    for suffix in ("kcal", "kg", "g"):
+    factor = 1.0
+    for suffix, suffix_factor in (("kcal", 1.0), ("kg", 1000.0), ("g", 1.0)):
         if cleaned.lower().endswith(suffix):
             cleaned = cleaned[: -len(suffix)]
+            factor = suffix_factor
+            break
     try:
-        value = float(cleaned)
+        value = float(cleaned) * factor
     except ValueError:
         return None
     return value if math.isfinite(value) else None
